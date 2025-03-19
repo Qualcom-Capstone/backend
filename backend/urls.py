@@ -15,8 +15,36 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include, re_path
+from rest_framework.permissions import AllowAny
+from drf_yasg.views import get_schema_view
+from drf_yasg import openapi
+from django.http import JsonResponse
+
+# 간단한 홈 페이지 뷰 추가
+def home(request):
+    return JsonResponse({"message": "Welcome to the API"})
+
+
+schema_view = get_schema_view(
+   openapi.Info(
+      title="Title",
+      default_version='v1',
+      description="Test description",
+      terms_of_service="<https://www.google.com/policies/terms/>",
+      contact=openapi.Contact(email="contact@snippets.local"),
+      license=openapi.License(name="BSD License"),
+   ),
+   public=True,
+   permission_classes=[AllowAny],
+)
+
 
 urlpatterns = [
-    # path("admin/", admin.site.urls),
+    path("", home, name="home"),  # ✅ 루트 경로 추가
+    path('admin/', admin.site.urls),
+    path('api/v1/',include('post.urls')),
+    re_path(r'^swagger(?P<format>\\.json|\\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
+    re_path(r'^swagger/$', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
+    re_path(r'^redoc/$', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
 ]

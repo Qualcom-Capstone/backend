@@ -18,15 +18,16 @@ if os.path.exists(env_path):
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 # DEBUG 설정
-DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+# DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+DEBUG = True
 
 # ALLOWED_HOSTS 설정
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
-
+# ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+ALLOWED_HOSTS = ["*"]
 # Application definition
 INSTALLED_APPS = [
-    # "django.contrib.admin",
-    # "django.contrib.auth",
+    "django.contrib.admin",
+    "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
@@ -41,7 +42,7 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
-    # "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -73,7 +74,7 @@ DATABASES = {
         'NAME': 'capstone',  # docker-compose에서 설정한 MYSQL_DATABASE 값
         'USER': 'sa',  # docker-compose에서 설정한 MYSQL_USER 값
         'PASSWORD': '1234',  # docker-compose에서 설정한 MYSQL_PASSWORD 값
-        'HOST': 'mysqldb',  # docker-compose의 서비스 이름 (컨테이너 내부에서 접속할 때 사용)
+        'HOST': 'localhost',  # docker-compose의 서비스 이름 (컨테이너 내부에서 접속할 때 사용)
         'PORT': 3306,  # 기본 MySQL 포트
         'OPTIONS': {
             'charset': 'utf8mb4',  # UTF-8 문자 인코딩 설정 (이모지 지원 포함)
@@ -121,3 +122,6 @@ SWAGGER_SETTINGS = {
     },
     "USE_SESSION_AUTH": False,
 }
+
+
+CORS_ORIGIN_ALLOW_ALL = True
