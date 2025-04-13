@@ -21,6 +21,8 @@ services:
     restart: always
     depends_on:
       - mysqldb
+    environment:
+      - DJANGO_SETTINGS_MODULE=backend.settings.prod
     command: >
       bash -c "python wait_mysql.py &&
       python manage.py migrate &&

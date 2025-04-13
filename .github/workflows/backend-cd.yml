@@ -1,44 +1,44 @@
-#name: CD - Deploy to Server via SSH
-#
-#on:
-#  workflow_run:
-#    workflows: ["CI - Build & Push Docker Image"]
-#    types:
-#      - completed
-#  workflow_dispatch:
-#
-#jobs:
-#  deploy:
-#    runs-on: ubuntu-latest
-#    environment: production
-#
-#    steps:
-#      - name: Checkout repository
-#        uses: actions/checkout@v3
-#
-#      - name: Upload docker-compose file to server
-#        uses: appleboy/scp-action@v0.1.4
-#        with:
-#          host: ${{ secrets.SERVER_HOST }}
-#          username: ${{ secrets.SERVER_USER }}
-#          key: ${{ secrets.SERVER_SSH_KEY }}
-#          source: docker-compose.app.yml
-#          target: /home/ubuntu/app
-#
-#      - name: Connect & Deploy via SSH
-#        uses: appleboy/ssh-action@v1.0.3
-#        with:
-#          host: ${{ secrets.SERVER_HOST }}
-#          username: ${{ secrets.SERVER_USER }}
-#          key: ${{ secrets.SERVER_SSH_KEY }}
-#          envs: MYSQL_USER,MYSQL_PASSWORD,MYSQL_DATABASE,MYSQL_ROOT_PASSWORD
-#          script: |
-#            export MYSQL_USER=${{ secrets.MYSQL_USER }}
-#            export MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
-#            export MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}
-#            export MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }}
-#
-#            cd /home/ubuntu/app
-#            docker compose -f docker-compose.app.yml pull
-#            docker compose -f docker-compose.app.yml down
-#            docker compose -f docker-compose.app.yml up -d --build
+name: CD - Deploy to Server via SSH
+
+on:
+  push:
+    branches:
+      - main  # ✅ 오직 main 브랜치 push만 트리거
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production  # ✅ production 환경 secrets와 연결
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Upload docker-compose file to server
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: docker-compose.app.yml
+          target: /home/ubuntu/app
+
+      - name: Connect & Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: MYSQL_USER,MYSQL_PASSWORD,MYSQL_DATABASE,MYSQL_ROOT_PASSWORD,SECRET_KEY
+          script: |
+            export MYSQL_USER=${{ secrets.MYSQL_USER }}
+            export MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
+            export MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}
+            export MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }}
+            export SECRET_KEY=${{ secrets.SECRET_KEY }}
+
+            cd /home/ubuntu/app
+            docker compose -f docker-compose.app.yml pull
+            docker compose -f docker-compose.app.yml down
+            docker compose -f docker-compose.app.yml up -d --build
