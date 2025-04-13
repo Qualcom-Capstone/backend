@@ -1,0 +1,65 @@
+name: CI - Pull Request Django Test
+
+on:
+  pull_request:
+    branches: [ develop ]  # ✅ develop 브랜치로 향하는 PR에만 동작
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: test_db
+          MYSQL_USER: sa
+          MYSQL_PASSWORD: 1234
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for DB to be ready
+        run: |
+          until mysqladmin ping -h"127.0.0.1" --silent; do
+            echo "Waiting for MySQL to be ready..."
+            sleep 3
+          done
+
+      - name: Django check & makemigrations
+        env:
+          DJANGO_SETTINGS_MODULE: backend.settings.dev
+        run: |
+          python backend/manage.py check
+          python backend/manage.py makemigrations --check --dry-run
+
+      - name: Run DB migrations (basic build test)
+        env:
+          DJANGO_SETTINGS_MODULE: backend.settings.dev
+        run: |
+          python backend/manage.py migrate
+
+      - name: Run Django tests
+        env:
+          DJANGO_SETTINGS_MODULE: backend.settings.dev
+        run: |
+          python backend/manage.py test
