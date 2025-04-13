@@ -41,7 +41,7 @@ jobs:
       - name: Wait for DB to be ready
         run: |
           until mysqladmin ping -h"127.0.0.1" --silent; do
-            echo "Waiting for MySQL to be ready..."
+            echo "Waiting for MySQL to be ready"
             sleep 3
           done
 
