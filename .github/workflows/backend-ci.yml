@@ -49,17 +49,17 @@ jobs:
         env:
           DJANGO_SETTINGS_MODULE: backend.settings.dev
         run: |
-          python backend/manage.py check
-          python backend/manage.py makemigrations --check --dry-run
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
 
       - name: Run DB migrations (basic build test)
         env:
           DJANGO_SETTINGS_MODULE: backend.settings.dev
         run: |
-          python backend/manage.py migrate
+          python manage.py migrate
 
       - name: Run Django tests
         env:
           DJANGO_SETTINGS_MODULE: backend.settings.dev
         run: |
-          python backend/manage.py test
+          python manage.py test
