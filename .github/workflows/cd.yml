@@ -35,6 +35,11 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           envs: MYSQL_USER,MYSQL_PASSWORD,MYSQL_DATABASE,MYSQL_ROOT_PASSWORD,SECRET_KEY
           script: |
+            export MYSQL_USER=${{ secrets.MYSQL_USER }}
+            export MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
+            export MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}
+            export MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }}
+            
             cd /home/ubuntu/app
             docker compose -f docker-compose.app.yml pull
             docker compose -f docker-compose.app.yml down
