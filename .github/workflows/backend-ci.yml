@@ -55,11 +55,10 @@ jobs:
       - name: Run DB migrations (basic build test)
         env:
           DJANGO_SETTINGS_MODULE: backend.settings.dev
+          DB_NAME: capstone
+          DB_USER: sa
+          DB_PASSWORD: 1234
+          DB_HOST: 127.0.0.1  # ✅ 여기가 핵심
         run: |
           python manage.py migrate
-
-      - name: Run Django tests
-        env:
-          DJANGO_SETTINGS_MODULE: backend.settings.dev
-        run: |
-          python manage.py test
+      

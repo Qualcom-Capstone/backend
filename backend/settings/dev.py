@@ -12,13 +12,13 @@ ALLOWED_HOSTS = ["*"]
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'capstone',  # docker-compose에서 설정한 MYSQL_DATABASE 값
-        'USER': 'sa',  # docker-compose에서 설정한 MYSQL_USER 값
-        'PASSWORD': '1234',  # docker-compose에서 설정한 MYSQL_PASSWORD 값
-        'HOST': 'mysqldb',  # docker-compose의 서비스 이름 (컨테이너 내부에서 접속할 때 사용)
-        'PORT': 3306,  # 기본 MySQL 포트
+        'NAME': os.getenv('DB_NAME', 'capstone'),
+        'USER': os.getenv('DB_USER', 'sa'),
+        'PASSWORD': os.getenv('DB_PASSWORD', '1234'),
+        'HOST': os.getenv('DB_HOST', 'mysqldb'),  # ✅ 기본값은 'mysqldb'로 설정
+        'PORT': int(os.getenv('DB_PORT', 3306)),
         'OPTIONS': {
-            'charset': 'utf8mb4',  # UTF-8 문자 인코딩 설정 (이모지 지원 포함)
+            'charset': 'utf8mb4',
         },
     }
 }
