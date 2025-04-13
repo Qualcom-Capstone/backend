@@ -3,16 +3,16 @@ services:
     image: mysql:latest
     container_name: mysqldb
     environment:
-      MYSQL_USER : sa
-      MYSQL_PASSWORD : 1234
-      MYSQL_DATABASE : capstone
-      MYSQL_ROOT_PASSWORD : 1234
+      MYSQL_USER : ${MYSQL_USER}
+      MYSQL_PASSWORD : ${MYSQL_PASSWORD}
+      MYSQL_DATABASE : ${MYSQL_DATABASE}
+      MYSQL_ROOT_PASSWORD : ${MYSQL_ROOT_PASSWORD}
     ports:
       - "3306:3306"
 
   backend:
     build:
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile-prod
     container_name: backend
     ports:
       - "8000:8000"
@@ -21,8 +21,7 @@ services:
     restart: always
     depends_on:
       - mysqldb
-    command: |
+    command: >
       bash -c "python wait_mysql.py &&
-      python manage.py makemigrations &&
       python manage.py migrate &&
-      python manage.py runserver 0.0.0.0:8000"
+      exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers=4 --threads=2"
