@@ -11,6 +11,7 @@ services:
       - "3306:3306"
 
   backend:
+    image: ${DOCKER_USERNAME}/django-backend:latest
     build:
       dockerfile: Dockerfile-prod
     container_name: backend
