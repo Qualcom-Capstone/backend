@@ -13,7 +13,7 @@ jobs:
         image: mysql:8
         env:
           MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: test_db
+          MYSQL_DATABASE: capstone
           MYSQL_USER: sa
           MYSQL_PASSWORD: 1234
         ports:
