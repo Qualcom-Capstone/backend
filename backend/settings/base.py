@@ -19,6 +19,7 @@ INSTALLED_APPS = [
     "post",
     "rest_framework",
     "drf_yasg",
+    "crud"
 ]
 
 MIDDLEWARE = [
