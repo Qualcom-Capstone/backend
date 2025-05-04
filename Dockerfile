@@ -4,6 +4,7 @@ FROM python:3.10
 WORKDIR /app
 # 의존성 설치
 COPY requirements.txt .
+
 RUN apt-get update
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
