@@ -22,6 +22,7 @@ INSTALLED_APPS = [
     "crud",
     'django_celery_beat',
     'django_celery_results',
+    'ocr',
 ]
 
 MIDDLEWARE = [
@@ -58,6 +59,10 @@ LANGUAGE_CODE = "ko-kr"
 TIME_ZONE = "Asia/Seoul"
 USE_I18N = True
 USE_TZ = True
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
 
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "static")

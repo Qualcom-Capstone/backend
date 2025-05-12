@@ -3,6 +3,7 @@ import os
 from celery import Celery
 import logging
 
+
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend.settings.prod')
 
 app = Celery('backend', broker='amqp://guest:guest@rabbitmq:5672/')
