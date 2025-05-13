@@ -15,4 +15,6 @@ urlpatterns = [
     # /api/v1/crud/cars/unchecked/ 경로: is_checked=False 차량 목록 조회 (GET)
     path('cars/unchecked/', views.get_unchecked_car_data_list, name='get_unchecked_car_data_list'),
 
+
+
 ]
