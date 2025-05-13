@@ -50,6 +50,4 @@ urlpatterns = [
 
     path('api/v1/crud/', include('crud.urls')),
 
-    path('ocr/', include('ocr.urls')),
-
 ]

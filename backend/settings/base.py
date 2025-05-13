@@ -22,7 +22,6 @@ INSTALLED_APPS = [
     "crud",
     'django_celery_beat',
     'django_celery_results',
-    'ocr',
 ]
 
 MIDDLEWARE = [
