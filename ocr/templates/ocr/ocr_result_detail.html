@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OCR 결과</title>
+</head>
+<body>
+    <h1>OCR 결과</h1>
+    <p>이미지: {% if ocr_result.image|urlencode %}<img src="{{ ocr_result.image }}" alt="Processed Image" style="max-width: 300px;">{% else %}{{ ocr_result.image }}{% endif %}</p>
+    <p>추출된 텍스트:</p>
+    <pre>{{ ocr_result.text }}</pre>
+    <p>처리 시간: {{ ocr_result.processed_at }}</p>
+    <p><a href="{% url 'upload_image' %}">새 이미지 업로드</a> | <a href="{% url 'process_image_url' %}">URL로 새 이미지 처리</a></p>
+</body>
+</html>

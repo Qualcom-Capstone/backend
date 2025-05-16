@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>이미지 URL로 OCR</title>
+</head>
+<body>
+    <h1>이미지 URL 입력</h1>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">OCR 실행</button>
+        {% if error %}
+            <p style="color: red;">{{ error }}</p>
+        {% endif %}
+    </form>
+    <p><a href="{% url 'upload_image' %}">직접 이미지 업로드</a></p>
+</body>
+</html>

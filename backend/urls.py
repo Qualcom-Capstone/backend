@@ -49,5 +49,6 @@ urlpatterns = [
     re_path(r'^redoc/$', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
 
     path('api/v1/crud/', include('crud.urls')),
+    path('ocr/', include('ocr.urls')),
 
 ]

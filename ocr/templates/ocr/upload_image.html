@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>이미지 업로드</title>
+</head>
+<body>
+    <h1>이미지 업로드</h1>
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">OCR 실행</button>
+        {% if error %}
+            <p style="color: red;">{{ error }}</p>
+        {% endif %}
+    </form>
+    <p><a href="{% url 'process_image_url' %}">이미지 URL로 처리</a></p>
+</body>
+</html>
