@@ -50,11 +50,26 @@ services:
 
   celery_worker:
     container_name: celery_worker
+    build: .
     volumes:
       - ./:/app
     #    command: sh -c "celery -A backend worker --loglevel=info"
     command: celery -A backend worker --concurrency=4 --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - DJANGO_SETTINGS_MODULE=backend.settings.dev
+    depends_on:
+      - rabbitmq
+      - backend
+    restart: always
+    tty: true
+
+  celery_worker_dlq:
+    container_name: celery_worker_dlq
     build: .
+    command: celery -A backend worker --loglevel=info -Q dlq_notify_queue
+    volumes:
+      - ./:/app
     environment:
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
       - DJANGO_SETTINGS_MODULE=backend.settings.dev
@@ -66,10 +81,10 @@ services:
 
   celery_beat:
     container_name: celery_beat
+    build: .
     volumes:
       - ./:/app
     command: sh -c "celery -A backend beat --loglevel=info"
-    build: .
     environment:
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
       - DJANGO_SETTINGS_MODULE=backend.settings.dev
