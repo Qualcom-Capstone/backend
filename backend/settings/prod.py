@@ -2,7 +2,15 @@
 from .base import *
 
 DEBUG = False
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "backend",  # 내부 컨테이너 간 통신
+    "api.autonotify.store",
+    "www.autonotify.store",
+    "autonotify.store"
+]
+
 
 DATABASES = {
     'default': {

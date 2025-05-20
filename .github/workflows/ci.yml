@@ -1,9 +1,6 @@
 name: CI - Build & Push Docker Image
 
 on:
-  pull_request:
-    branches:
-      - develop
   push:
     branches: [ develop ]
 
