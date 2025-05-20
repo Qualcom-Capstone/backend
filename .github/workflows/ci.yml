@@ -23,5 +23,5 @@ jobs:
 
       - name: Build and push backend image
         run: |
-          docker build -f Dockerfile-prod -t ${{ secrets.DOCKER_USERNAME }}/django-backend:latest .
-          docker push ${{ secrets.DOCKER_USERNAME }}/django-backend:latest
+          docker build -f Dockerfile-prod -t ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_IMAGE_NAME }}-be:latest .
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_IMAGE_NAME }}-be:latest
