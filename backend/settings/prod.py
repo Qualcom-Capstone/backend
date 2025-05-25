@@ -8,7 +8,8 @@ ALLOWED_HOSTS = [
     "backend",  # 내부 컨테이너 간 통신
     "api.autonotify.store",
     "www.autonotify.store",
-    "autonotify.store"
+    "autonotify.store",
+    "https://www.autonotify.store"
 ]
 
 
