@@ -6,3 +6,5 @@
 __pycache__/
 static
 backend.env
+# Service account keys and sensitive files
+crud/fcm/firebase-service-account.json

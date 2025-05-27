@@ -72,6 +72,9 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "static")
 
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 SWAGGER_SETTINGS = {
@@ -134,3 +137,5 @@ CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30분
 CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25분
+
+
