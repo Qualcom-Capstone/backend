@@ -8,12 +8,6 @@ COPY requirements.txt .
 
 RUN apt-get update
 RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
-# 소스 코드 복사
-COPY . .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 포트 오픈
-EXPOSE 8000
-
-# Dockerfile-prod
-CMD ["gunicorn", "backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers=4", "--threads=2"]
+CMD ["celery", "-A", "backend", "worker", "--loglevel=info"]
