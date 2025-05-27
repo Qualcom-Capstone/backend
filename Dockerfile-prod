@@ -6,7 +6,7 @@ WORKDIR /app
 # 의존성 설치
 COPY requirements.txt .
 
-RUN apt-get update
+RUN apt-get update && apt-get install -y libgl1-mesa-gl libglib2.0-0 libsm6 libxext6 libxrender1
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 # 소스 코드 복사
