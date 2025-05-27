@@ -10,4 +10,6 @@ RUN apt-get update
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements-celery.txt
 
+COPY . .
+
 CMD ["celery", "-A", "backend", "worker", "--loglevel=info"]
