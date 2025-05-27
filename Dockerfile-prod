@@ -10,6 +10,7 @@ RUN apt-get update \
       build-essential \
       python3-dev \
       default-libmysqlclient-dev \
+      pkg-config \
       libglib2.0-0 \
  && rm -rf /var/lib/apt/lists/*
 
@@ -44,7 +45,5 @@ RUN pip install --no-index --find-links=/wheels \
 # 소스 코드 복사
 COPY . .
 
-EXPOSE 8000
-
-# Dockerfile-prod
-CMD ["gunicorn", "backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers=4", "--threads=2"]
+# 엔트리포인트
+CMD ["gunicorn", "backend.wsgi:application", "--bind", "0.0.0.0:8000"]
