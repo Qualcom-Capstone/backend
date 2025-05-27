@@ -1,17 +1,44 @@
-FROM python:3.10
+### --- Builder Stage ---
+FROM python:3.10-slim AS builder
 
 # 작업 디렉토리 설정
 WORKDIR /app
-# 의존성 설치
+
+# 최소 OS 패키지 설치 (빌드 의존성)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libglib2.0-0 \
+ && rm -rf /var/lib/apt/lists/*
+
+# requirements 휠 생성
 COPY requirements.txt .
-RUN apt-get update
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+
+
+### --- Runtime Stage ---
+FROM python:3.10-slim
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# 최소 OS 패키지 설치 (런타임 의존성)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libgl1-mesa-glx \
+      libglib2.0-0 \
+ && rm -rf /var/lib/apt/lists/*
+
+# 빌더에서 생성한 휠 복사 후 설치
+COPY --from=builder /wheels /wheels
+RUN pip install --no-index --find-links=/wheels \
+      torch==2.1.0+cpu \
+      torchvision==0.16.0+cpu \
+      opencv-python-headless \
+      mysqlclient \
+ && rm -rf /wheels
+
 # 소스 코드 복사
 COPY . .
-
-# 포트 오픈
-EXPOSE 8000
 
 # Dockerfile-prod
 CMD ["gunicorn", "backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers=4", "--threads=2"]
