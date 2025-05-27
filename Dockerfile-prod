@@ -4,15 +4,19 @@ FROM python:3.10-slim AS builder
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# 최소 OS 패키지 설치 (빌드 의존성)
+# 빌드용 시스템 의존성 설치
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
+      build-essential \
+      python3-dev \
+      default-libmysqlclient-dev \
       libglib2.0-0 \
  && rm -rf /var/lib/apt/lists/*
 
 # requirements 휠 생성
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+RUN pip install --upgrade pip \
+ && pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
 
 ### --- Runtime Stage ---
@@ -21,7 +25,7 @@ FROM python:3.10-slim
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# 최소 OS 패키지 설치 (런타임 의존성)
+# 런타임용 최소 시스템 의존성 설치
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libgl1-mesa-glx \
@@ -39,6 +43,8 @@ RUN pip install --no-index --find-links=/wheels \
 
 # 소스 코드 복사
 COPY . .
+
+EXPOSE 8000
 
 # Dockerfile-prod
 CMD ["gunicorn", "backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers=4", "--threads=2"]
