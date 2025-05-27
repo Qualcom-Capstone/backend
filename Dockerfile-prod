@@ -7,7 +7,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 RUN pip install --upgrade pip
-RUN pip pip install libgl1-mesa-glx
+RUN pip install libgl1-mesa-glx
 RUN pip install -r requirements.txt
 # 소스 코드 복사
 COPY . .
