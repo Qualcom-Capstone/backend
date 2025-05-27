@@ -1,0 +1,13 @@
+FROM python:3.10
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# 의존성 설치
+COPY requirements-celery .
+
+RUN apt-get update
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir -r requirements-celery.txt
+
+CMD ["celery", "-A", "backend", "worker", "--loglevel=info"]
