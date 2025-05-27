@@ -2,15 +2,7 @@
 from .base import *
 
 DEBUG = False
-ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    "backend",  # 내부 컨테이너 간 통신
-    "api.autonotify.store",
-    "www.autonotify.store",
-    "autonotify.store",
-    "https://www.autonotify.store"
-]
+ALLOWED_HOSTS = ["*"]
 
 
 DATABASES = {
@@ -26,3 +18,5 @@ DATABASES = {
         },
     }
 }
+
+CORS_ORIGIN_ALLOW_ALL = True
