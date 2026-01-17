@@ -10,11 +10,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 SECRET_KEY = os.getenv("SECRET_KEY", "insecure-key")
 
-# S3 설정
-AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY')
-AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_KEY')
-AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_S3_BUCKET_NAME')
-AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION')
+# GCS (Google Cloud Storage) 설정
+GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'your-bucket-name')
+# GOOGLE_APPLICATION_CREDENTIALS 환경 변수로 서비스 계정 키 파일 경로 지정
+# 예: export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
 
 
 INSTALLED_APPS = [

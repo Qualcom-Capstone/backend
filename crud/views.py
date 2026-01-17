@@ -14,7 +14,7 @@ from .models import CarData, DeviceToken
 from .serializers import CarDataSerializer
 from crud.tasks import send_speeding_alert
 
-from .image_download import download_image_from_s3 #
+from .image_download import download_image_from_s3  # GCS 사용 (하위 호환 함수명)
 from .ocr import process_pil_image_roi_for_plate_ocr # 수정된 OCR 함수
 
 
@@ -63,8 +63,8 @@ class CarListCreateView(APIView):
         # s3_key와 ROI 좌표가 모두 있어야 OCR 수행
         if s3_key and all(coord is not None for coord in [roi_x, roi_y, roi_w, roi_h]):
             try:
-                # 1. S3에서 이미지 다운로드 (image_download.py 사용)
-                pil_image = download_image_from_s3(s3_key)  #
+                # 1. GCS에서 이미지 다운로드 (image_download.py 사용)
+                pil_image = download_image_from_s3(s3_key)  # 함수명은 호환성 유지
 
                 # 2. OCR 수행 (수정된 ocr.py 함수 호출)
                 # s3_key를 파일명 힌트로 전달
@@ -92,7 +92,7 @@ class CarListCreateView(APIView):
                 ocr_note = f"이미지 다운로드 또는 OCR 처리 중 예외 발생: {str(e)}"
                 print(ocr_note)
         elif not s3_key:
-            ocr_note = "S3 키가 제공되지 않아 OCR을 수행하지 않았습니다."
+            ocr_note = "GCS 키가 제공되지 않아 OCR을 수행하지 않았습니다."
             print(ocr_note)
         else:  # s3_key는 있지만 좌표가 없는 경우
             ocr_note = "OCR을 위한 x,y,w,h 좌표가 모두 제공되지 않았습니다."
