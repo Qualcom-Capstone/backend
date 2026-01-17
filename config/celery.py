@@ -5,7 +5,7 @@ from kombu import Exchange, Queue
 
 import logging
 
-app = Celery("backend")
+app = Celery("config")
 
 app.conf.update(
     broker_url=os.getenv("CELERY_BROKER_URL", "amqp://guest:guest@rabbitmq:5672//"),
