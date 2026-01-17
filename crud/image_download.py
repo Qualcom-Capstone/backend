@@ -36,7 +36,3 @@ def download_image_from_gcs(blob_name: str) -> Image.Image:
         raise Exception(f"File {blob_name} does not exist in bucket {GCS_BUCKET_NAME}")
     except Exception as e:
         raise Exception(f"Failed to download image from GCS: {str(e)}")
-
-
-# 하위 호환성을 위한 별칭 (기존 코드에서 사용 중인 함수명)
-download_image_from_s3 = download_image_from_gcs

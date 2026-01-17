@@ -4,7 +4,7 @@ from django.db import models
 class CarData(models.Model):
     car_number = models.CharField(max_length=20, blank=True, null=True) # OCR 결과로 채워짐
     car_speed = models.IntegerField()
-    s3_key = models.CharField(max_length=512, unique=True)
+    gcs_key = models.CharField(max_length=512, unique=True)  # GCS blob name
     image_url = models.URLField()
     is_checked = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -19,7 +19,7 @@ class CarData(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return self.car_number if self.car_number else f"Data for {self.s3_key}"
+        return self.car_number if self.car_number else f"Data for {self.gcs_key}"
 
 class NotificationLog(models.Model):
     car_data = models.ForeignKey(CarData, on_delete=models.CASCADE) #

@@ -12,7 +12,7 @@ class CarDataSerializer(serializers.ModelSerializer):
         allow_null=True
     )
     car_speed = serializers.IntegerField(help_text="측정된 차량 속도 (km/h)")  #
-    s3_key = serializers.CharField(max_length=512, help_text="GCS에 저장된 객체의 키 (blob name)")  # 필드명은 호환성 유지
+    gcs_key = serializers.CharField(max_length=512, help_text="GCS에 저장된 객체의 키 (blob name)")
     image_url = serializers.URLField(help_text="차량 이미지 URL")  #
     is_checked = serializers.BooleanField(default=False, help_text="확인 여부")  #
 
@@ -25,9 +25,9 @@ class CarDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = CarData
         fields = [
-            'id', 'car_number', 'car_speed', 's3_key', 'image_url',
+            'id', 'car_number', 'car_speed', 'gcs_key', 'image_url',
             'is_checked', 'created_at', 'updated_at',
-            'x', 'y', 'w', 'h'  # 새 필드 추가
+            'x', 'y', 'w', 'h'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']  #
 
