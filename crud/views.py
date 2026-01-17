@@ -14,7 +14,7 @@ from .models import CarData, DeviceToken
 from .serializers import CarDataSerializer
 from crud.tasks import send_speeding_alert
 
-from .image_download import download_image_from_s3  # GCS 사용 (하위 호환 함수명)
+from .image_download import download_image_from_gcs
 from .ocr import process_pil_image_roi_for_plate_ocr # 수정된 OCR 함수
 
 
@@ -39,7 +39,7 @@ class CarListCreateView(APIView):
 
     @swagger_auto_schema(
         operation_description="""차량 데이터를 생성합니다.
-            s3_key를 이용해 이미지를 다운로드하고, 제공된 x,y,w,h 좌표로 OCR을 수행하여 차량번호를 추출합니다.
+            gcs_key를 이용해 이미지를 다운로드하고, 제공된 x,y,w,h 좌표로 OCR을 수행하여 차량번호를 추출합니다.
             추출된 차량번호와 x,y,w,h 좌표를 함께 저장합니다.""",
         request_body=CarDataSerializer,  #
         responses={
@@ -47,10 +47,10 @@ class CarListCreateView(APIView):
             400: "Bad Request - 유효성 검사 오류 또는 OCR 실패"
         }
     )
-    def post(self, request):  #
+    def post(self, request):
         mutable_data = request.data.copy()  # 수정 가능한 데이터 복사본
 
-        s3_key = mutable_data.get("s3_key")
+        gcs_key = mutable_data.get("gcs_key")
         # POST 요청에서 x, y, w, h 좌표 직접 받기
         roi_x = mutable_data.get("x")
         roi_y = mutable_data.get("y")
@@ -60,18 +60,18 @@ class CarListCreateView(APIView):
         extracted_car_number = None
         ocr_note = None  # OCR 관련 참고 또는 오류 메시지
 
-        # s3_key와 ROI 좌표가 모두 있어야 OCR 수행
-        if s3_key and all(coord is not None for coord in [roi_x, roi_y, roi_w, roi_h]):
+        # gcs_key와 ROI 좌표가 모두 있어야 OCR 수행
+        if gcs_key and all(coord is not None for coord in [roi_x, roi_y, roi_w, roi_h]):
             try:
                 # 1. GCS에서 이미지 다운로드 (image_download.py 사용)
-                pil_image = download_image_from_s3(s3_key)  # 함수명은 호환성 유지
+                pil_image = download_image_from_gcs(gcs_key)
 
                 # 2. OCR 수행 (수정된 ocr.py 함수 호출)
-                # s3_key를 파일명 힌트로 전달
+                # gcs_key를 파일명 힌트로 전달
                 ocr_result = process_pil_image_roi_for_plate_ocr(
                     pil_image,
-                    float(roi_x), float(roi_y), float(roi_w), float(roi_h),  # serializer에서 float으로 변환되지만 명시적 변환
-                    image_file_name_hint=s3_key
+                    float(roi_x), float(roi_y), float(roi_w), float(roi_h),
+                    image_file_name_hint=gcs_key
                 )
 
                 extracted_car_number = ocr_result.get('car_number')
@@ -91,10 +91,10 @@ class CarListCreateView(APIView):
             except Exception as e:
                 ocr_note = f"이미지 다운로드 또는 OCR 처리 중 예외 발생: {str(e)}"
                 print(ocr_note)
-        elif not s3_key:
+        elif not gcs_key:
             ocr_note = "GCS 키가 제공되지 않아 OCR을 수행하지 않았습니다."
             print(ocr_note)
-        else:  # s3_key는 있지만 좌표가 없는 경우
+        else:  # gcs_key는 있지만 좌표가 없는 경우
             ocr_note = "OCR을 위한 x,y,w,h 좌표가 모두 제공되지 않았습니다."
             print(ocr_note)
 
