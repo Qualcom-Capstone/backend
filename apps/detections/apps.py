@@ -1,0 +1,8 @@
+from django.apps import AppConfig
+
+
+class DetectionsConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.detections'
+    verbose_name = '과속 감지'
+
