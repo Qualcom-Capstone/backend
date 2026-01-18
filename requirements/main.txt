@@ -1,0 +1,9 @@
+# Main Service Requirements
+-r base.txt
+
+# WSGI Server
+gunicorn==23.0.0
+
+# MQTT Client
+paho-mqtt==2.0.0
+

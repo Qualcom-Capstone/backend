@@ -1,0 +1,9 @@
+# Alert Service Requirements
+-r base.txt
+
+# Firebase (FCM)
+firebase-admin==6.8.0
+
+# Gevent (I/O Pool)
+gevent==24.2.1
+
