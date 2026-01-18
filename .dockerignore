@@ -1,75 +1,75 @@
 # Git
-.git
+.git/
 .gitignore
-.github
 
 # Python
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-.Python
+__pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
 
 # Virtual Environment
-venv
-env
-ENV
-.venv
+venv/
+env/
+ENV/
+.venv/
 
 # IDE
-.vscode
-.idea
+.vscode/
+.idea/
 *.swp
 *.swo
 *~
 
-# Environment (use Docker env vars instead)
+# Environment files (런타임에 주입)
 *.env
 .env.*
+backend.env
 
-# Testing
-.pytest_cache
-.coverage
-htmlcov
-.tox
-*.cover
+# Credentials - 빌드 시 제외 (런타임에 볼륨 마운트)
+credentials/*.json
+!credentials/*.example.json
+crud/fcm/*.json
 
-# Documentation
-README.md
-*.md
-docs/
+# Database
+*.sqlite3
+*.db
 
-# Docker files
-Dockerfile*
-docker-compose*.yml
-.dockerignore
-
-# CI/CD
-.github
-
-# Local development
+# Media files
 media/
-static/
-
-# Celery
-celerybeat-schedule
-celerybeat.pid
 
 # Logs
 *.log
 logs/
 
-# Database (SQLite)
-*.sqlite3
-*.db
+# Cache
+.cache/
+.pytest_cache/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Build artifacts
-dist/
-build/
-*.egg-info/
+# Documentation (이미지 빌드에 불필요)
+docs/
+*.md
+!README.md
+
+# Tests (프로덕션 이미지에 불필요한 경우)
+# tests/
+# *_test.py
+# test_*.py
+
+# Docker
+Dockerfile*
+docker-compose*.yml

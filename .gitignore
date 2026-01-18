@@ -1,10 +1,75 @@
-.idea
-*.env
-*.log
-*.pot
-*.pyc
+# Python
 __pycache__/
-static
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+*.env
+.env.*
+!.env.example
 backend.env
-# Service account keys and sensitive files
-crud/fcm/firebase-service-account.json
+!backend.env.example
+
+# Credentials (실제 인증 파일 - 절대 커밋 금지)
+credentials/*.json
+!credentials/*.example.json
+
+# Legacy FCM 폴더 (마이그레이션 후 삭제 예정)
+crud/fcm/*.json
+!crud/fcm/*.example.json
+
+# Database
+*.sqlite3
+*.db
+
+# Media files (uploaded content)
+media/
+staticfiles/
+
+# Logs
+*.log
+logs/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# pytest
+.pytest_cache/
+
+# mypy
+.mypy_cache/
