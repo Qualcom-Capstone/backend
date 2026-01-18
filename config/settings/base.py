@@ -1,20 +1,19 @@
-# backend/settings/base.py
+# config/settings/base.py
 import os
 from pathlib import Path
 import pymysql
-from kombu import Queue
 
 pymysql.install_as_MySQLdb()
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-SECRET_KEY = os.getenv("SECRET_KEY", "insecure-key")
+SECRET_KEY = os.getenv("SECRET_KEY", "insecure-key-change-in-production")
 
 # GCS (Google Cloud Storage) 설정
 GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'your-bucket-name')
-# GOOGLE_APPLICATION_CREDENTIALS 환경 변수로 서비스 계정 키 파일 경로 지정
-# 예: export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
 
+# Firebase 설정
+FIREBASE_CREDENTIALS = os.getenv('FIREBASE_CREDENTIALS')
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -23,11 +22,18 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Third-party
     "corsheaders",
     "rest_framework",
+    "django_filters",
     "drf_yasg",
+    "django_celery_results",
+    # New Apps (PRD 구조)
+    "apps.vehicles",
+    "apps.detections",
+    "apps.notifications",
+    # Legacy App (기존 호환)
     "crud",
-    'django_celery_results',
 ]
 
 MIDDLEWARE = [
@@ -61,19 +67,32 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
+# Internationalization
 LANGUAGE_CODE = "ko-kr"
 TIME_ZONE = "Asia/Seoul"
 USE_I18N = True
 USE_TZ = True
 
+# Static files
 STATIC_URL = "/static/"
-STATIC_ROOT = os.path.join(BASE_DIR, "static")
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# REST Framework
+REST_FRAMEWORK = {
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.OrderingFilter',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+}
+
+# Swagger
 SWAGGER_SETTINGS = {
     "SECURITY_DEFINITIONS": {
         "Bearer": {
@@ -85,54 +104,83 @@ SWAGGER_SETTINGS = {
     "USE_SESSION_AUTH": False,
 }
 
-# 기본 브로커 및 직렬화 설정은 유지
-CELERY_BROKER_URL = 'amqp://guest:guest@rabbitmq:5672/'
-CELERY_ACCEPT_CONTENT = ['application/json']
+# ==================================================
+# Celery 설정
+# ==================================================
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'amqp://sa:1234@rabbitmq:5672//')
+CELERY_RESULT_BACKEND = 'rpc://'
+CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Seoul'
-CELERY_RESULT_BACKEND = 'rpc://'
+CELERY_ENABLE_UTC = True
 
-# Task 재시도, DLQ 등을 위한 안정성 관련 설정
-CELERY_TASK_TIME_LIMIT = 30 * 60
+# 안정성 설정
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-CELERY_TASK_REVOKE = True
+
+# Timeout 설정
+CELERY_TASK_TIME_LIMIT = 300  # 5분
+CELERY_TASK_SOFT_TIME_LIMIT = 240  # 4분
+
+# Prefetch
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# Priority
+CELERY_TASK_QUEUE_MAX_PRIORITY = 10
+CELERY_TASK_DEFAULT_PRIORITY = 5
 
 # 로그 설정
 CELERYD_HIJACK_ROOT_LOGGER = False
 CELERYD_REDIRECT_STDOUTS = False
 
 # Flower 관리자 계정
-CELERY_FLOWER_USER = 'root'
-CELERY_FLOWER_PASSWORD = 'root'
+CELERY_FLOWER_USER = os.getenv('CELERY_FLOWER_USER', 'admin')
+CELERY_FLOWER_PASSWORD = os.getenv('CELERY_FLOWER_PASSWORD', 'admin')
 
-# ✅ [추가] Task 라우팅 큐 설정
-CELERY_TASK_QUEUES = (
-    Queue('fcm_notify_queue', routing_key='fcm_notify'),
-    Queue('dlq_notify_queue', routing_key='dlq_notify'),
-)
+# ==================================================
+# CORS 설정
+# ==================================================
+CORS_ALLOWED_ORIGINS = os.getenv(
+    'CORS_ALLOWED_ORIGINS',
+    'http://localhost:5173,http://localhost:3000'
+).split(',')
 
-CELERY_TASK_ROUTES = {
-    'crud.tasks.send_speeding_alert': {
-        'queue': 'fcm_notify_queue',
-        'routing_key': 'fcm_notify'
+CORS_ALLOW_CREDENTIALS = True
+
+# ==================================================
+# Logging 설정
+# ==================================================
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
     },
-    'crud.tasks.handle_dlq_event': {
-        'queue': 'dlq_notify_queue',
-        'routing_key': 'dlq_notify'
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'celery': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }
-
-# DLQ 설정
-CELERY_TASK_QUEUE_MAX_PRIORITY = 10
-CELERY_TASK_DEFAULT_PRIORITY = 5
-CELERY_TASK_QUEUE_DEFAULT_PRIORITY = 5
-
-# DLQ 관련 설정
-CELERY_TASK_REJECT_ON_WORKER_LOST = True
-CELERY_TASK_ACKS_LATE = True
-CELERY_TASK_REJECT_ON_WORKER_LOST = True
-CELERY_TASK_TIME_LIMIT = 30 * 60  # 30분
-CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25분
-
-

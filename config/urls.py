@@ -1,18 +1,5 @@
 """
-URL configuration for backend project.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/5.1/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
+URL configuration for speedcam project.
 """
 from django.contrib import admin
 from django.urls import path, include, re_path
@@ -22,31 +9,67 @@ from drf_yasg import openapi
 from django.http import JsonResponse
 
 
-# 간단한 홈 페이지 뷰 추가
 def home(request):
-    return JsonResponse({"message": "Welcome to the API"})
+    """API 홈 엔드포인트"""
+    return JsonResponse({
+        "service": "SpeedCam API",
+        "version": "v1",
+        "status": "running",
+        "endpoints": {
+            "swagger": "/swagger/",
+            "redoc": "/redoc/",
+            "admin": "/admin/",
+            "api_v1": "/api/v1/",
+        }
+    })
+
+
+def health(request):
+    """헬스체크 엔드포인트"""
+    return JsonResponse({"status": "healthy"})
 
 
 schema_view = get_schema_view(
     openapi.Info(
-        title="Title",
+        title="SpeedCam API",
         default_version='v1',
-        description="Test description",
-        terms_of_service="<https://www.google.com/policies/terms/>",
-        contact=openapi.Contact(email="contact@snippets.local"),
-        license=openapi.License(name="BSD License"),
+        description="과속 차량 감지 및 알림 시스템 API",
+        contact=openapi.Contact(email="admin@speedcam.local"),
     ),
     public=True,
     permission_classes=[AllowAny],
 )
 
 urlpatterns = [
-    path("", home, name="home"),  # ✅ 루트 경로 추가
+    # 홈 & 헬스체크
+    path("", home, name="home"),
+    path("health/", health, name="health"),
+    
+    # Admin
     path('admin/', admin.site.urls),
-    re_path(r'^swagger(?P<format>\\.json|\\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
-    re_path(r'^swagger/$', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
-    re_path(r'^redoc/$', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
+    
+    # API Documentation
+    re_path(
+        r'^swagger(?P<format>\.json|\.yaml)$',
+        schema_view.without_ui(cache_timeout=0),
+        name='schema-json'
+    ),
+    re_path(
+        r'^swagger/$',
+        schema_view.with_ui('swagger', cache_timeout=0),
+        name='schema-swagger-ui'
+    ),
+    re_path(
+        r'^redoc/$',
+        schema_view.with_ui('redoc', cache_timeout=0),
+        name='schema-redoc'
+    ),
 
+    # API v1 - New Structure (PRD)
+    path('api/v1/', include('apps.vehicles.urls')),
+    path('api/v1/', include('apps.detections.urls')),
+    path('api/v1/', include('apps.notifications.urls')),
+
+    # API v1 - Legacy (crud)
     path('api/v1/crud/', include('crud.urls')),
-
 ]
