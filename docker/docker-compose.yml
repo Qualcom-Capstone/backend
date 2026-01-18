@@ -1,0 +1,146 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: speedcam-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: speedcam
+      MYSQL_USER: sa
+      MYSQL_PASSWORD: "1234"
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "sa", "-p1234"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - speedcam-network
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: speedcam-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: sa
+      RABBITMQ_DEFAULT_PASS: "1234"
+    ports:
+      - "5672:5672"
+      - "1883:1883"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - speedcam-network
+
+  main:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.main
+    container_name: speedcam-main
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.dev
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=speedcam
+      - DB_USER=sa
+      - DB_PASSWORD=1234
+      - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
+      - RABBITMQ_HOST=rabbitmq
+      - MQTT_PORT=1883
+      - MQTT_USER=sa
+      - MQTT_PASS=1234
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../credentials:/app/credentials:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - speedcam-network
+
+  ocr-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ocr
+    container_name: speedcam-ocr
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.dev
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=speedcam
+      - DB_USER=sa
+      - DB_PASSWORD=1234
+      - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-cloud-storage.json
+      - OCR_CONCURRENCY=2
+      - OCR_MOCK=true
+    volumes:
+      - ../credentials:/app/credentials:ro
+    depends_on:
+      - main
+      - rabbitmq
+    networks:
+      - speedcam-network
+
+  alert-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.alert
+    container_name: speedcam-alert
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.dev
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=speedcam
+      - DB_USER=sa
+      - DB_PASSWORD=1234
+      - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
+      - FIREBASE_CREDENTIALS=/app/credentials/firebase-service-account.json
+      - ALERT_CONCURRENCY=50
+      - FCM_MOCK=true
+    volumes:
+      - ../credentials:/app/credentials:ro
+    depends_on:
+      - main
+      - rabbitmq
+    networks:
+      - speedcam-network
+
+  flower:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.main
+    container_name: speedcam-flower
+    command: celery -A config flower --port=5555
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.dev
+      - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
+    ports:
+      - "5555:5555"
+    depends_on:
+      - rabbitmq
+    networks:
+      - speedcam-network
+
+volumes:
+  mysql_data:
+  rabbitmq_data:
+
+networks:
+  speedcam-network:
+    driver: bridge
+
