@@ -46,14 +46,15 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
     - GCS에서 이미지 다운로드
     - EasyOCR 실행
     - 직접 MySQL 업데이트 (Choreography 패턴)
+    - MSA: 각 서비스별 DB 사용
     """
     from apps.detections.models import Detection
     from apps.vehicles.models import Vehicle
     from tasks.notification_tasks import send_notification
 
     try:
-        # 1. 상태를 processing으로 업데이트
-        Detection.objects.filter(id=detection_id).update(
+        # 1. 상태를 processing으로 업데이트 (detections_db)
+        Detection.objects.using('detections_db').filter(id=detection_id).update(
             status='processing',
             updated_at=timezone.now()
         )
@@ -91,21 +92,23 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
                     plate_number = normalize_plate(text)
                     confidence = conf
         
-        # 5. 직접 MySQL 업데이트
-        with transaction.atomic():
-            detection = Detection.objects.select_for_update().get(id=detection_id)
-            detection.ocr_result = plate_number
-            detection.ocr_confidence = confidence
-            detection.status = 'completed'
-            detection.processed_at = timezone.now()
-            detection.save(update_fields=[
-                'ocr_result', 'ocr_confidence', 'status',
-                'processed_at', 'updated_at'
-            ])
-            
-            # 6. Vehicle 매칭
-            if plate_number:
-                vehicle = Vehicle.objects.filter(plate_number=plate_number).first()
+        # 5. 직접 MySQL 업데이트 (detections_db)
+        detection = Detection.objects.using('detections_db').get(id=detection_id)
+        detection.ocr_result = plate_number
+        detection.ocr_confidence = confidence
+        detection.status = 'completed'
+        detection.processed_at = timezone.now()
+        detection.save(update_fields=[
+            'ocr_result', 'ocr_confidence', 'status',
+            'processed_at', 'updated_at'
+        ])
+        
+        # 6. Vehicle 매칭 (MSA: vehicles_db에서 조회)
+        if plate_number:
+            try:
+                vehicle = Vehicle.objects.using('vehicles_db').filter(
+                    plate_number=plate_number
+                ).first()
                 if vehicle:
                     detection.vehicle_id = vehicle.id
                     detection.save(update_fields=['vehicle_id', 'updated_at'])
@@ -116,6 +119,8 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
                             args=[detection_id],
                             queue='fcm_queue'
                         )
+            except Exception as e:
+                logger.warning(f"Vehicle lookup failed: {e}")
         
         logger.info(f"OCR completed for detection {detection_id}: {plate_number}")
         return {
@@ -125,12 +130,11 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
         }
         
     except Exception as exc:
-        # 실패 시 에러 기록
-        Detection.objects.filter(id=detection_id).update(
+        # 실패 시 에러 기록 (detections_db)
+        Detection.objects.using('detections_db').filter(id=detection_id).update(
             status='failed',
             error_message=str(exc),
             updated_at=timezone.now()
         )
         logger.error(f"OCR failed for detection {detection_id}: {exc}")
         raise self.retry(exc=exc)
-

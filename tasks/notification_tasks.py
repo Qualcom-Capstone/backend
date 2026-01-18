@@ -22,24 +22,32 @@ def send_notification(self, detection_id: int):
     """
     FCM 푸시 알림 전송 Task
     - Exponential Backoff 재시도
+    - MSA: 각 서비스별 DB에서 조회
     """
     from apps.detections.models import Detection
+    from apps.vehicles.models import Vehicle
     from apps.notifications.models import Notification
 
     try:
-        # 1. Detection 및 Vehicle 조회
-        detection = Detection.objects.select_related('vehicle').get(
+        # 1. Detection 조회 (detections_db)
+        detection = Detection.objects.using('detections_db').get(
             id=detection_id,
             status='completed'
         )
         
-        if not detection.vehicle or not detection.vehicle.fcm_token:
+        # 2. Vehicle 조회 (vehicles_db) - MSA: 별도 DB
+        vehicle = None
+        if detection.vehicle_id:
+            try:
+                vehicle = Vehicle.objects.using('vehicles_db').get(id=detection.vehicle_id)
+            except Vehicle.DoesNotExist:
+                logger.warning(f"Vehicle {detection.vehicle_id} not found")
+        
+        if not vehicle or not vehicle.fcm_token:
             logger.warning(f"No FCM token for detection {detection_id}")
             return {'status': 'skipped', 'reason': 'No FCM token'}
         
-        vehicle = detection.vehicle
-        
-        # 2. FCM 메시지 생성
+        # 3. FCM 메시지 생성
         title = f"⚠️ 과속 위반 감지: {detection.ocr_result}"
         body = (
             f"📍 위치: {detection.location}\n"
@@ -84,11 +92,11 @@ def send_notification(self, detection_id: int):
                 token=vehicle.fcm_token
             )
             
-            # 3. FCM API 호출
+            # 4. FCM API 호출
             response = messaging.send(message)
         
-        # 4. 성공 이력 저장
-        Notification.objects.create(
+        # 5. 성공 이력 저장 (notifications_db)
+        Notification.objects.using('notifications_db').create(
             detection_id=detection_id,
             fcm_token=vehicle.fcm_token,
             title=title,
@@ -107,7 +115,7 @@ def send_notification(self, detection_id: int):
     except Exception as exc:
         # FCM 실패 시 이력 저장 후 재시도
         try:
-            Notification.objects.create(
+            Notification.objects.using('notifications_db').create(
                 detection_id=detection_id,
                 status='failed',
                 retry_count=self.request.retries,
@@ -118,4 +126,3 @@ def send_notification(self, detection_id: int):
         
         logger.error(f"Notification failed for detection {detection_id}: {exc}")
         raise
-
