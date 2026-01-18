@@ -65,11 +65,8 @@ urlpatterns = [
         name='schema-redoc'
     ),
 
-    # API v1 - New Structure (PRD)
+    # API v1
     path('api/v1/', include('apps.vehicles.urls')),
     path('api/v1/', include('apps.detections.urls')),
     path('api/v1/', include('apps.notifications.urls')),
-
-    # API v1 - Legacy (crud)
-    path('api/v1/crud/', include('crud.urls')),
 ]

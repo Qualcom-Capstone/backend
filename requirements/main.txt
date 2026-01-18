@@ -7,3 +7,6 @@ gunicorn==23.0.0
 # MQTT Client
 paho-mqtt==2.0.0
 
+# Celery Monitoring
+flower==2.0.1
+
