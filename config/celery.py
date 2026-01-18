@@ -1,43 +1,117 @@
+"""Celery Configuration"""
 from __future__ import absolute_import, unicode_literals
 import os
 from celery import Celery
 from kombu import Exchange, Queue
 
-import logging
+# Django settings 모듈 설정
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings.dev')
 
-app = Celery("config")
+app = Celery('speedcam')
 
+# Exchange 정의
+ocr_exchange = Exchange('ocr_exchange', type='direct', durable=True)
+fcm_exchange = Exchange('fcm_exchange', type='direct', durable=True)
+dlq_exchange = Exchange('dlq_exchange', type='fanout', durable=True)
+
+# 레거시 Exchange (기존 crud 호환)
+speeding_exchange = Exchange('speeding_x', type='direct')
+speeding_dlx = Exchange('speeding_dlx', type='direct')
+
+# Celery 설정
 app.conf.update(
-    broker_url=os.getenv("CELERY_BROKER_URL", "amqp://guest:guest@rabbitmq:5672//"),
-    result_backend="rpc://",
-    task_acks_late=True,                # 작업 성공 시점에 ACK
-    task_reject_on_worker_lost=True,    # 워커 죽으면 NACK
+    # 브로커 설정
+    broker_url=os.getenv('CELERY_BROKER_URL', 'amqp://sa:1234@rabbitmq:5672//'),
+    result_backend='rpc://',
+    
+    # 직렬화
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    
+    # 시간대
+    timezone='Asia/Seoul',
+    enable_utc=True,
+    
+    # 안정성
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    broker_connection_retry_on_startup=True,
+    
+    # Timeout
+    task_time_limit=300,
+    task_soft_time_limit=240,
+    
+    # Prefetch
+    worker_prefetch_multiplier=1,
 )
 
-speeding_x        = Exchange("speeding_x",        type="direct")
-speeding_dlx      = Exchange("speeding_dlx",      type="direct")   # DLQ 전용
-
+# Queue 정의
 app.conf.task_queues = (
+    # 새로운 Queue (PRD 구조)
     Queue(
-        "speeding_alert",
-        exchange=speeding_x,
-        routing_key="speeding.alert",
+        'ocr_queue',
+        exchange=ocr_exchange,
+        routing_key='ocr',
         queue_arguments={
-            "x-dead-letter-exchange": "speeding_dlx",
-            "x-dead-letter-routing-key": "speeding.alert.dlq",
+            'x-dead-letter-exchange': 'dlq_exchange',
+            'x-message-ttl': 3600000,
+            'x-max-priority': 10,
+        }
+    ),
+    Queue(
+        'fcm_queue',
+        exchange=fcm_exchange,
+        routing_key='fcm',
+        queue_arguments={
+            'x-dead-letter-exchange': 'dlq_exchange',
+            'x-message-ttl': 3600000,
+        }
+    ),
+    Queue(
+        'dlq_queue',
+        exchange=dlq_exchange,
+        routing_key='',
+    ),
+    # 레거시 Queue (기존 crud 호환)
+    Queue(
+        'speeding_alert',
+        exchange=speeding_exchange,
+        routing_key='speeding.alert',
+        queue_arguments={
+            'x-dead-letter-exchange': 'speeding_dlx',
+            'x-dead-letter-routing-key': 'speeding.alert.dlq',
         },
     ),
     Queue(
-        "speeding_alert_dlq",
+        'speeding_alert_dlq',
         exchange=speeding_dlx,
-        routing_key="speeding.alert.dlq",
+        routing_key='speeding.alert.dlq',
         durable=True,
     ),
 )
 
+# Task 라우팅
 app.conf.task_routes = {
-    "crud.tasks.send_speeding_alert":   {"queue": "speeding_alert"},
-    "crud.tasks.handle_dlq_event":      {"queue": "speeding_alert_dlq"},
+    # 새로운 Tasks (PRD 구조)
+    'tasks.ocr_tasks.process_ocr': {
+        'queue': 'ocr_queue',
+        'exchange': 'ocr_exchange',
+        'routing_key': 'ocr',
+    },
+    'tasks.notification_tasks.send_notification': {
+        'queue': 'fcm_queue',
+        'exchange': 'fcm_exchange',
+        'routing_key': 'fcm',
+    },
+    # 레거시 Tasks (기존 crud 호환)
+    'crud.tasks.send_speeding_alert': {
+        'queue': 'speeding_alert',
+    },
+    'crud.tasks.handle_dlq_event': {
+        'queue': 'speeding_alert_dlq',
+    },
 }
 
-app.autodiscover_tasks()
+# Task 자동 발견
+app.autodiscover_tasks(['tasks', 'crud'])
