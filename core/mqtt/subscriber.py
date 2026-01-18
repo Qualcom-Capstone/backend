@@ -21,6 +21,7 @@ class MQTTSubscriber:
     
     def __init__(self):
         self.client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             protocol=mqtt.MQTTv5,
             client_id=f"django-main-{os.getpid()}"
         )
