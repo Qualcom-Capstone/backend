@@ -1,0 +1,14 @@
+# Development Requirements (All-in-One)
+-r main.txt
+-r ocr.txt
+-r alert.txt
+
+# Testing
+pytest==8.3.3
+pytest-django==4.9.0
+
+# Code Quality
+flake8==7.1.1
+black==24.10.0
+isort==5.13.2
+
