@@ -14,9 +14,6 @@ ocr_exchange = Exchange('ocr_exchange', type='direct', durable=True)
 fcm_exchange = Exchange('fcm_exchange', type='direct', durable=True)
 dlq_exchange = Exchange('dlq_exchange', type='fanout', durable=True)
 
-# 레거시 Exchange (기존 crud 호환)
-speeding_exchange = Exchange('speeding_x', type='direct')
-speeding_dlx = Exchange('speeding_dlx', type='direct')
 
 # Celery 설정
 app.conf.update(
@@ -73,22 +70,6 @@ app.conf.task_queues = (
         exchange=dlq_exchange,
         routing_key='',
     ),
-    # 레거시 Queue (기존 crud 호환)
-    Queue(
-        'speeding_alert',
-        exchange=speeding_exchange,
-        routing_key='speeding.alert',
-        queue_arguments={
-            'x-dead-letter-exchange': 'speeding_dlx',
-            'x-dead-letter-routing-key': 'speeding.alert.dlq',
-        },
-    ),
-    Queue(
-        'speeding_alert_dlq',
-        exchange=speeding_dlx,
-        routing_key='speeding.alert.dlq',
-        durable=True,
-    ),
 )
 
 # Task 라우팅
@@ -104,14 +85,7 @@ app.conf.task_routes = {
         'exchange': 'fcm_exchange',
         'routing_key': 'fcm',
     },
-    # 레거시 Tasks (기존 crud 호환)
-    'crud.tasks.send_speeding_alert': {
-        'queue': 'speeding_alert',
-    },
-    'crud.tasks.handle_dlq_event': {
-        'queue': 'speeding_alert_dlq',
-    },
 }
 
 # Task 자동 발견
-app.autodiscover_tasks(['tasks', 'crud'])
+app.autodiscover_tasks(['tasks'])
