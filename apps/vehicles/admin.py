@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Vehicle, DeviceToken
+from .models import Vehicle
 
 
 @admin.register(Vehicle)
@@ -14,14 +14,3 @@ class VehicleAdmin(admin.ModelAdmin):
             return f"{obj.fcm_token[:30]}..."
         return "-"
     fcm_token_short.short_description = 'FCM Token'
-
-
-@admin.register(DeviceToken)
-class DeviceTokenAdmin(admin.ModelAdmin):
-    list_display = ['id', 'token_short', 'registered_at']
-    readonly_fields = ['registered_at']
-
-    def token_short(self, obj):
-        return f"{obj.token[:30]}..."
-    token_short.short_description = 'Token'
-

@@ -1,12 +1,14 @@
 from rest_framework import serializers
-from .models import Notification, NotificationLog
+from .models import Notification
 
 
 class NotificationSerializer(serializers.ModelSerializer):
+    """Notification 상세 Serializer"""
+    
     class Meta:
         model = Notification
         fields = [
-            'id', 'detection', 'fcm_token', 'title', 'body',
+            'id', 'detection_id', 'fcm_token', 'title', 'body',
             'sent_at', 'status', 'retry_count', 'error_message',
             'created_at'
         ]
@@ -14,8 +16,8 @@ class NotificationSerializer(serializers.ModelSerializer):
 
 
 class NotificationListSerializer(serializers.ModelSerializer):
-    detection_id = serializers.IntegerField(source='detection.id', read_only=True)
-
+    """목록 조회용 간략 Serializer"""
+    
     class Meta:
         model = Notification
         fields = [
@@ -23,9 +25,9 @@ class NotificationListSerializer(serializers.ModelSerializer):
         ]
 
 
-# 레거시 호환
-class NotificationLogSerializer(serializers.ModelSerializer):
+class NotificationCreateSerializer(serializers.ModelSerializer):
+    """알림 생성용 Serializer"""
+    
     class Meta:
-        model = NotificationLog
-        fields = '__all__'
-
+        model = Notification
+        fields = ['detection_id', 'fcm_token', 'title', 'body']

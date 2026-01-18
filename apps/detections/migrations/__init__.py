@@ -1,0 +1,2 @@
+# Detections app migrations
+

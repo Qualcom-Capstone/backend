@@ -1,15 +1,14 @@
 from rest_framework import serializers
-from .models import Detection, CarData
-from apps.vehicles.serializers import VehicleSerializer
+from .models import Detection
 
 
 class DetectionSerializer(serializers.ModelSerializer):
-    vehicle = VehicleSerializer(read_only=True)
-
+    """Detection 상세 Serializer"""
+    
     class Meta:
         model = Detection
         fields = [
-            'id', 'vehicle', 'detected_speed', 'speed_limit',
+            'id', 'vehicle_id', 'detected_speed', 'speed_limit',
             'location', 'camera_id', 'image_gcs_uri',
             'ocr_result', 'ocr_confidence',
             'detected_at', 'processed_at', 'status', 'error_message',
@@ -20,16 +19,11 @@ class DetectionSerializer(serializers.ModelSerializer):
 
 class DetectionListSerializer(serializers.ModelSerializer):
     """목록 조회용 간략 Serializer"""
-    vehicle_plate = serializers.CharField(
-        source='vehicle.plate_number', 
-        read_only=True,
-        default=None
-    )
-
+    
     class Meta:
         model = Detection
         fields = [
-            'id', 'vehicle_plate', 'detected_speed', 'speed_limit',
+            'id', 'vehicle_id', 'detected_speed', 'speed_limit',
             'location', 'camera_id', 'ocr_result', 'status',
             'detected_at', 'processed_at'
         ]
@@ -37,6 +31,7 @@ class DetectionListSerializer(serializers.ModelSerializer):
 
 class DetectionCreateSerializer(serializers.ModelSerializer):
     """MQTT 메시지로부터 생성용"""
+    
     class Meta:
         model = Detection
         fields = [
@@ -46,17 +41,10 @@ class DetectionCreateSerializer(serializers.ModelSerializer):
 
 
 class DetectionStatisticsSerializer(serializers.Serializer):
+    """통계 데이터 Serializer"""
     total_detections = serializers.IntegerField()
     completed_count = serializers.IntegerField()
     failed_count = serializers.IntegerField()
     pending_count = serializers.IntegerField()
     avg_speed = serializers.FloatField()
     max_speed = serializers.FloatField()
-
-
-# 레거시 호환
-class CarDataSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CarData
-        fields = '__all__'
-
