@@ -5,18 +5,17 @@ from django.db.models import Count, Avg, Max
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 
-from .models import Detection, CarData
+from .models import Detection
 from .serializers import (
     DetectionSerializer,
     DetectionListSerializer,
     DetectionStatisticsSerializer,
-    CarDataSerializer
 )
 
 
 class DetectionViewSet(viewsets.ReadOnlyModelViewSet):
-    """과속 감지 내역 API"""
-    queryset = Detection.objects.select_related('vehicle').all()
+    """과속 감지 내역 API (MSA: detections_db 사용)"""
+    queryset = Detection.objects.using('detections_db').all()
     serializer_class = DetectionSerializer
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['status', 'camera_id', 'location']
@@ -40,7 +39,7 @@ class DetectionViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def statistics(self, request):
         """위반 통계"""
-        queryset = Detection.objects.all()
+        queryset = Detection.objects.using('detections_db').all()
         
         # 기간 필터 (선택)
         period = request.query_params.get('period')
@@ -86,12 +85,3 @@ class DetectionViewSet(viewsets.ReadOnlyModelViewSet):
         
         serializer = DetectionStatisticsSerializer(stats)
         return Response(serializer.data)
-
-
-class CarDataViewSet(viewsets.ModelViewSet):
-    """레거시 CarData API (호환용)"""
-    queryset = CarData.objects.all()
-    serializer_class = CarDataSerializer
-    filter_backends = [filters.OrderingFilter]
-    ordering = ['-created_at']
-

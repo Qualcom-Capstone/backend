@@ -2,24 +2,37 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Vehicle, DeviceToken
+from .models import Vehicle
 from .serializers import (
     VehicleSerializer, 
     VehicleCreateSerializer,
     FCMTokenUpdateSerializer,
-    DeviceTokenSerializer
 )
 
 
 class VehicleViewSet(viewsets.ModelViewSet):
-    """차량 정보 관리 API"""
-    queryset = Vehicle.objects.all()
+    """차량 정보 관리 API (MSA: vehicles_db 사용)"""
+    queryset = Vehicle.objects.using('vehicles_db').all()
     serializer_class = VehicleSerializer
 
     def get_serializer_class(self):
         if self.action == 'create':
             return VehicleCreateSerializer
         return VehicleSerializer
+
+    def perform_create(self, serializer):
+        """생성 시 vehicles_db에 저장"""
+        instance = Vehicle.objects.using('vehicles_db').create(
+            **serializer.validated_data
+        )
+        serializer.instance = instance
+
+    def perform_update(self, serializer):
+        """업데이트 시 vehicles_db 사용"""
+        instance = serializer.instance
+        for attr, value in serializer.validated_data.items():
+            setattr(instance, attr, value)
+        instance.save(using='vehicles_db')
 
     @action(detail=True, methods=['patch'], url_path='fcm-token')
     def update_fcm_token(self, request, pk=None):
@@ -29,7 +42,7 @@ class VehicleViewSet(viewsets.ModelViewSet):
         
         if serializer.is_valid():
             vehicle.fcm_token = serializer.validated_data['fcm_token']
-            vehicle.save(update_fields=['fcm_token', 'updated_at'])
+            vehicle.save(using='vehicles_db', update_fields=['fcm_token', 'updated_at'])
             return Response(VehicleSerializer(vehicle).data)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -46,7 +59,7 @@ class VehicleViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        vehicle, created = Vehicle.objects.update_or_create(
+        vehicle, created = Vehicle.objects.using('vehicles_db').update_or_create(
             plate_number=plate_number,
             defaults={'fcm_token': fcm_token}
         )
@@ -55,10 +68,3 @@ class VehicleViewSet(viewsets.ModelViewSet):
             VehicleSerializer(vehicle).data,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
         )
-
-
-class DeviceTokenViewSet(viewsets.ModelViewSet):
-    """레거시 디바이스 토큰 API (호환용)"""
-    queryset = DeviceToken.objects.all()
-    serializer_class = DeviceTokenSerializer
-

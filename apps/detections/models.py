@@ -2,7 +2,12 @@ from django.db import models
 
 
 class Detection(models.Model):
-    """과속 감지 내역"""
+    """
+    과속 감지 내역
+    
+    MSA 구조: FK 대신 ID로 다른 서비스 데이터 참조
+    - vehicle_id: Vehicles Service의 Vehicle ID
+    """
     
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -11,13 +16,12 @@ class Detection(models.Model):
         ('failed', 'Failed'),
     ]
 
-    vehicle = models.ForeignKey(
-        'vehicles.Vehicle',
-        on_delete=models.SET_NULL,
+    # MSA: FK 대신 ID로 참조 (Vehicles Service)
+    vehicle_id = models.BigIntegerField(
         null=True,
         blank=True,
-        related_name='detections',
-        verbose_name='차량'
+        db_index=True,
+        verbose_name='차량 ID'
     )
     detected_speed = models.FloatField(verbose_name='감지 속도')
     speed_limit = models.FloatField(default=60.0, verbose_name='제한 속도')
@@ -74,7 +78,7 @@ class Detection(models.Model):
         verbose_name_plural = '감지 내역 목록'
         ordering = ['-detected_at']
         indexes = [
-            models.Index(fields=['vehicle']),
+            models.Index(fields=['vehicle_id']),
             models.Index(fields=['detected_at']),
             models.Index(fields=['status', 'created_at']),
             models.Index(fields=['camera_id', 'detected_at']),
@@ -82,29 +86,3 @@ class Detection(models.Model):
 
     def __str__(self):
         return f"{self.ocr_result or 'Unknown'} - {self.detected_speed}km/h"
-
-
-class CarData(models.Model):
-    """레거시 모델 (기존 crud 호환)"""
-    car_number = models.CharField(max_length=20, blank=True, null=True)
-    car_speed = models.IntegerField()
-    gcs_key = models.CharField(max_length=512, unique=True)
-    image_url = models.URLField()
-    is_checked = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    x = models.FloatField(null=True, blank=True)
-    y = models.FloatField(null=True, blank=True)
-    w = models.FloatField(null=True, blank=True)
-    h = models.FloatField(null=True, blank=True)
-
-    class Meta:
-        db_table = 'crud_cardata'  # 기존 테이블 호환
-        ordering = ['-created_at']
-        verbose_name = '차량 데이터 (레거시)'
-        verbose_name_plural = '차량 데이터 목록 (레거시)'
-
-    def __str__(self):
-        return self.car_number if self.car_number else f"Data for {self.gcs_key}"
-

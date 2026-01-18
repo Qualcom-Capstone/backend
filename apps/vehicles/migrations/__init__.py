@@ -1,0 +1,2 @@
+# Vehicles app migrations
+

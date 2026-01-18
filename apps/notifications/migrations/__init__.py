@@ -1,0 +1,2 @@
+# Notifications app migrations
+
