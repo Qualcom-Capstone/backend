@@ -23,6 +23,3 @@ pytz==2025.1
 drf-yasg==1.21.10
 PyYAML==6.0.2
 
-# DataDog (Optional)
-ddtrace==2.6.0
-

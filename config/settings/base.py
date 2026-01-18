@@ -28,12 +28,10 @@ INSTALLED_APPS = [
     "django_filters",
     "drf_yasg",
     "django_celery_results",
-    # New Apps (PRD 구조)
+    # Apps
     "apps.vehicles",
     "apps.detections",
     "apps.notifications",
-    # Legacy App (기존 호환)
-    "crud",
 ]
 
 MIDDLEWARE = [
