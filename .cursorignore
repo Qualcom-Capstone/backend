@@ -26,6 +26,12 @@ ENV/
 .env.*
 backend.env
 
+# Credentials (실제 인증 파일 - 민감 정보)
+credentials/*.json
+!credentials/*.example.json
+crud/fcm/*.json
+!crud/fcm/*.example.json
+
 # Database
 *.sqlite3
 *.db
@@ -44,12 +50,8 @@ celerybeat.pid
 
 # Git
 .git/
-.gitignore
 
-# Docker
-.dockerignore
-Dockerfile*
-docker-compose*.yml
+# Docker (수정 허용)
 
 # Cache
 .cache/
