@@ -11,6 +11,7 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "sa", "-p1234"]
       interval: 10s
@@ -49,11 +50,17 @@ services:
     container_name: speedcam-main
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.dev
+      # DB 연결 정보
       - DB_HOST=mysql
       - DB_PORT=3306
-      - DB_NAME=speedcam
       - DB_USER=sa
       - DB_PASSWORD=1234
+      # MSA - 각 서비스별 DB
+      - DB_NAME=speedcam
+      - DB_NAME_VEHICLES=speedcam_vehicles
+      - DB_NAME_DETECTIONS=speedcam_detections
+      - DB_NAME_NOTIFICATIONS=speedcam_notifications
+      # Message Broker
       - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
       - RABBITMQ_HOST=rabbitmq
       - MQTT_PORT=1883
@@ -78,12 +85,19 @@ services:
     container_name: speedcam-ocr
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.dev
+      # DB 연결 정보
       - DB_HOST=mysql
       - DB_PORT=3306
-      - DB_NAME=speedcam
       - DB_USER=sa
       - DB_PASSWORD=1234
+      # MSA - OCR Worker는 detections와 vehicles DB 사용
+      - DB_NAME=speedcam
+      - DB_NAME_VEHICLES=speedcam_vehicles
+      - DB_NAME_DETECTIONS=speedcam_detections
+      - DB_NAME_NOTIFICATIONS=speedcam_notifications
+      # Message Broker
       - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
+      # GCS
       - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-cloud-storage.json
       - OCR_CONCURRENCY=2
       - OCR_MOCK=true
@@ -102,12 +116,19 @@ services:
     container_name: speedcam-alert
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.dev
+      # DB 연결 정보
       - DB_HOST=mysql
       - DB_PORT=3306
-      - DB_NAME=speedcam
       - DB_USER=sa
       - DB_PASSWORD=1234
+      # MSA - Alert Worker는 notifications, detections, vehicles DB 사용
+      - DB_NAME=speedcam
+      - DB_NAME_VEHICLES=speedcam_vehicles
+      - DB_NAME_DETECTIONS=speedcam_detections
+      - DB_NAME_NOTIFICATIONS=speedcam_notifications
+      # Message Broker
       - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
+      # FCM
       - FIREBASE_CREDENTIALS=/app/credentials/firebase-service-account.json
       - ALERT_CONCURRENCY=50
       - FCM_MOCK=true
@@ -142,4 +163,3 @@ volumes:
 networks:
   speedcam-network:
     driver: bridge
-
