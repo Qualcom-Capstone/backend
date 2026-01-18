@@ -1,0 +1,23 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# 시스템 의존성
+RUN apt-get update && apt-get install -y \
+    gcc \
+    default-libmysqlclient-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# 의존성 설치
+COPY requirements/base.txt requirements/alert.txt ./requirements/
+RUN pip install --no-cache-dir -r requirements/alert.txt
+
+# 앱 복사
+COPY . .
+
+# 스크립트 실행 권한
+RUN chmod +x scripts/*.sh
+
+CMD ["sh", "scripts/start_alert_worker.sh"]
+
