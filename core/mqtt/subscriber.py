@@ -22,30 +22,30 @@ class MQTTSubscriber:
     def __init__(self):
         self.client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            protocol=mqtt.MQTTv5,
+            protocol=mqtt.MQTTv311,
             client_id=f"django-main-{os.getpid()}"
         )
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect
-        
+
         # 인증 설정
         username = os.getenv('MQTT_USER', 'sa')
         password = os.getenv('MQTT_PASS', '1234')
         self.client.username_pw_set(username, password)
-    
-    def on_connect(self, client, userdata, flags, rc, properties=None):
+
+    def on_connect(self, client, userdata, flags, reason_code, properties):
         """MQTT 연결 시 토픽 구독"""
-        if rc == 0:
+        if reason_code.is_failure:
+            logger.error(f"MQTT connection failed: {reason_code}")
+        else:
             logger.info("Connected to MQTT broker")
             client.subscribe("detections/new", qos=1)
-        else:
-            logger.error(f"MQTT connection failed with code {rc}")
-    
-    def on_disconnect(self, client, userdata, rc, properties=None):
+
+    def on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         """연결 끊김 처리"""
-        if rc != 0:
-            logger.warning(f"Unexpected MQTT disconnect (code: {rc}), reconnecting...")
+        if reason_code.is_failure:
+            logger.warning(f"Unexpected MQTT disconnect: {reason_code}, reconnecting...")
     
     def on_message(self, client, userdata, msg):
         """
