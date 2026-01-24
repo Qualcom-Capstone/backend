@@ -1,12 +1,12 @@
 services:
+  # ===========================================
+  # Infrastructure Services
+  # ===========================================
   mysql:
     image: mysql:8.0
     container_name: speedcam-mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: speedcam
-      MYSQL_USER: sa
-      MYSQL_PASSWORD: "1234"
+    env_file:
+      - ../mysql.env
     ports:
       - "3306:3306"
     volumes:
@@ -23,9 +23,8 @@ services:
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: speedcam-rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: sa
-      RABBITMQ_DEFAULT_PASS: "1234"
+    env_file:
+      - ../rabbitmq.env
     ports:
       - "5672:5672"
       - "1883:1883"
@@ -43,29 +42,16 @@ services:
     networks:
       - speedcam-network
 
+  # ===========================================
+  # Application Services
+  # ===========================================
   main:
     build:
       context: ..
       dockerfile: docker/Dockerfile.main
     container_name: speedcam-main
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.dev
-      # DB 연결 정보
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=sa
-      - DB_PASSWORD=1234
-      # MSA - 각 서비스별 DB
-      - DB_NAME=speedcam
-      - DB_NAME_VEHICLES=speedcam_vehicles
-      - DB_NAME_DETECTIONS=speedcam_detections
-      - DB_NAME_NOTIFICATIONS=speedcam_notifications
-      # Message Broker
-      - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
-      - RABBITMQ_HOST=rabbitmq
-      - MQTT_PORT=1883
-      - MQTT_USER=sa
-      - MQTT_PASS=1234
+    env_file:
+      - ../backend.env
     ports:
       - "8000:8000"
     volumes:
@@ -83,24 +69,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.ocr
     container_name: speedcam-ocr
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.dev
-      # DB 연결 정보
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=sa
-      - DB_PASSWORD=1234
-      # MSA - OCR Worker는 detections와 vehicles DB 사용
-      - DB_NAME=speedcam
-      - DB_NAME_VEHICLES=speedcam_vehicles
-      - DB_NAME_DETECTIONS=speedcam_detections
-      - DB_NAME_NOTIFICATIONS=speedcam_notifications
-      # Message Broker
-      - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
-      # GCS
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/gcp-cloud-storage.json
-      - OCR_CONCURRENCY=2
-      - OCR_MOCK=true
+    env_file:
+      - ../backend.env
     volumes:
       - ../credentials:/app/credentials:ro
     depends_on:
@@ -114,24 +84,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.alert
     container_name: speedcam-alert
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.dev
-      # DB 연결 정보
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=sa
-      - DB_PASSWORD=1234
-      # MSA - Alert Worker는 notifications, detections, vehicles DB 사용
-      - DB_NAME=speedcam
-      - DB_NAME_VEHICLES=speedcam_vehicles
-      - DB_NAME_DETECTIONS=speedcam_detections
-      - DB_NAME_NOTIFICATIONS=speedcam_notifications
-      # Message Broker
-      - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
-      # FCM
-      - FIREBASE_CREDENTIALS=/app/credentials/firebase-service-account.json
-      - ALERT_CONCURRENCY=50
-      - FCM_MOCK=true
+    env_file:
+      - ../backend.env
     volumes:
       - ../credentials:/app/credentials:ro
     depends_on:
@@ -145,10 +99,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.main
     container_name: speedcam-flower
+    env_file:
+      - ../backend.env
     command: celery -A config flower --port=5555
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.dev
-      - CELERY_BROKER_URL=amqp://sa:1234@rabbitmq:5672//
     ports:
       - "5555:5555"
     depends_on:
