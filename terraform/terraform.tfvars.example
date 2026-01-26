@@ -46,3 +46,9 @@ ocr_concurrency   = 2
 alert_concurrency = 50
 ocr_mock          = true
 fcm_mock          = true
+
+# =============================================================================
+# DataDog
+# =============================================================================
+dd_api_key = "your-datadog-api-key"
+# dd_site  = "ap1.datadoghq.com"  # default

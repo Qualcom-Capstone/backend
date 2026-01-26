@@ -16,7 +16,12 @@ resource "google_compute_firewall" "speedcam_internal" {
 
   allow {
     protocol = "tcp"
-    ports    = ["3306", "5672", "1883", "15672", "8000"]
+    ports    = ["3306", "5672", "1883", "15672", "8000", "8126"]
+  }
+
+  allow {
+    protocol = "udp"
+    ports    = ["8125"]
   }
 
   source_ranges = ["10.0.0.0/8"]

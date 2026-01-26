@@ -14,7 +14,8 @@ resource "google_compute_instance" "main" {
 
   depends_on = [
     null_resource.init_rabbitmq,
-    null_resource.init_mysql
+    null_resource.init_mysql,
+    google_compute_instance.datadog_agent
   ]
 
   tags = ["speedcam", "speedcam-web"]
@@ -48,6 +49,7 @@ resource "google_compute_instance" "main" {
           env = concat([
             for k, v in local.common_env : { name = k, value = v }
           ], [
+            { name = "DD_SERVICE", value = "speedcam-api" },
             { name = "RABBITMQ_HOST", value = google_compute_instance.rabbitmq.network_interface[0].network_ip },
             { name = "MQTT_PORT", value = "1883" },
             { name = "MQTT_USER", value = var.rabbitmq_user },
@@ -87,7 +89,8 @@ resource "google_compute_instance" "ocr" {
 
   depends_on = [
     null_resource.init_rabbitmq,
-    null_resource.init_mysql
+    null_resource.init_mysql,
+    google_compute_instance.datadog_agent
   ]
 
   tags = ["speedcam"]
@@ -121,6 +124,7 @@ resource "google_compute_instance" "ocr" {
           env = concat([
             for k, v in local.common_env : { name = k, value = v }
           ], [
+            { name = "DD_SERVICE", value = "speedcam-ocr" },
             { name = "OCR_CONCURRENCY", value = tostring(var.ocr_concurrency) },
             { name = "OCR_MOCK", value = tostring(var.ocr_mock) },
           ])
@@ -156,7 +160,8 @@ resource "google_compute_instance" "alert" {
 
   depends_on = [
     null_resource.init_rabbitmq,
-    null_resource.init_mysql
+    null_resource.init_mysql,
+    google_compute_instance.datadog_agent
   ]
 
   tags = ["speedcam"]
@@ -190,6 +195,7 @@ resource "google_compute_instance" "alert" {
           env = concat([
             for k, v in local.common_env : { name = k, value = v }
           ], [
+            { name = "DD_SERVICE", value = "speedcam-alert" },
             { name = "ALERT_CONCURRENCY", value = tostring(var.alert_concurrency) },
             { name = "FCM_MOCK", value = tostring(var.fcm_mock) },
           ])
