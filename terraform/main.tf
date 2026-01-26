@@ -68,5 +68,11 @@ locals {
     DB_USER                  = var.db_user
     DB_PASSWORD              = var.db_password
     CELERY_BROKER_URL        = "amqp://${var.rabbitmq_user}:${var.rabbitmq_password}@${google_compute_instance.rabbitmq.network_interface[0].network_ip}:5672//"
+    DD_AGENT_HOST            = google_compute_instance.datadog_agent.network_interface[0].network_ip
+    DD_TRACE_AGENT_PORT      = "8126"
+    DD_ENV                   = var.environment
+    DD_LOGS_INJECTION        = "true"
+    DD_TRACE_SAMPLE_RATE     = "1"
+    DD_PROFILING_ENABLED     = "true"
   }
 }

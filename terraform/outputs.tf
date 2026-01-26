@@ -56,6 +56,16 @@ output "alert_external_ip" {
   value       = google_compute_instance.alert.network_interface[0].access_config[0].nat_ip
 }
 
+output "datadog_internal_ip" {
+  description = "DataDog Agent internal IP"
+  value       = google_compute_instance.datadog_agent.network_interface[0].network_ip
+}
+
+output "datadog_external_ip" {
+  description = "DataDog Agent external IP"
+  value       = google_compute_instance.datadog_agent.network_interface[0].access_config[0].nat_ip
+}
+
 # =============================================================================
 # Service URLs
 # =============================================================================
@@ -127,6 +137,7 @@ output "deployment_summary" {
     -------------------------------------------
     RabbitMQ:    ${google_compute_instance.rabbitmq.network_interface[0].network_ip} (${google_compute_instance.rabbitmq.network_interface[0].access_config[0].nat_ip})
     MySQL:       ${google_compute_instance.mysql.network_interface[0].network_ip} (${google_compute_instance.mysql.network_interface[0].access_config[0].nat_ip})
+    DataDog:     ${google_compute_instance.datadog_agent.network_interface[0].network_ip} (${google_compute_instance.datadog_agent.network_interface[0].access_config[0].nat_ip})
 
     -------------------------------------------
     Services

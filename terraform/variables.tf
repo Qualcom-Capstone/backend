@@ -166,3 +166,19 @@ variable "fcm_mock" {
   type        = bool
   default     = true
 }
+
+# =============================================================================
+# DataDog
+# =============================================================================
+
+variable "dd_api_key" {
+  description = "DataDog API Key"
+  type        = string
+  sensitive   = true
+}
+
+variable "dd_site" {
+  description = "DataDog site (e.g., ap1.datadoghq.com)"
+  type        = string
+  default     = "ap1.datadoghq.com"
+}

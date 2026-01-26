@@ -1,5 +1,5 @@
 # =============================================================================
-# Speedcam MSA - GCP Deployment Makefile
+# Speedcam MSA - Build & Operations Makefile
 # =============================================================================
 
 # Configuration
@@ -14,19 +14,13 @@ MAIN_IMAGE = $(REGISTRY)/main:$(TAG)
 OCR_IMAGE = $(REGISTRY)/ocr:$(TAG)
 ALERT_IMAGE = $(REGISTRY)/alert:$(TAG)
 
-# Infrastructure
-DB_USER ?= sa
-DB_PASSWORD ?= 1234
-RABBITMQ_USER ?= sa
-RABBITMQ_PASSWORD ?= 1234
-
 # Colors for output
 GREEN = \033[0;32m
 YELLOW = \033[0;33m
 RED = \033[0;31m
 NC = \033[0m
 
-.PHONY: help setup build push deploy clean
+.PHONY: help build push clean tf-init tf-plan tf-apply tf-destroy tf-output restart-services restart-main restart-ocr restart-alert status health dev-up dev-down dev-logs dev-build
 
 # =============================================================================
 # Help
@@ -39,46 +33,10 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
-	@echo "  make build                    # Build all images"
-	@echo "  make push                     # Push all images"
-	@echo "  make deploy                   # Full deployment"
-	@echo "  make deploy-main              # Deploy main service only"
-	@echo "  make TAG=v1.0.0 build push    # Build and push with specific tag"
-
-# =============================================================================
-# Setup
-# =============================================================================
-
-setup: setup-gcloud setup-registry setup-firewall ## Initial GCP setup
-
-setup-gcloud: ## Configure gcloud
-	@echo "$(GREEN)Configuring gcloud...$(NC)"
-	gcloud config set compute/region $(GCP_REGION)
-	gcloud config set compute/zone $(GCP_ZONE)
-	@echo "$(GREEN)Enabling required APIs...$(NC)"
-	gcloud services enable compute.googleapis.com artifactregistry.googleapis.com
-
-setup-registry: ## Create Artifact Registry
-	@echo "$(GREEN)Creating Artifact Registry...$(NC)"
-	-gcloud artifacts repositories create speedcam \
-		--repository-format=docker \
-		--location=$(GCP_REGION) \
-		--description="Speedcam MSA Docker images" 2>/dev/null || true
-	@echo "$(GREEN)Configuring Docker authentication...$(NC)"
-	gcloud auth configure-docker $(GCP_REGION)-docker.pkg.dev --quiet
-
-setup-firewall: ## Create firewall rules
-	@echo "$(GREEN)Creating firewall rules...$(NC)"
-	-gcloud compute firewall-rules create speedcam-internal \
-		--network=default \
-		--allow=tcp:3306,tcp:5672,tcp:1883,tcp:15672,tcp:8000 \
-		--source-ranges=10.0.0.0/8 \
-		--target-tags=speedcam 2>/dev/null || true
-	-gcloud compute firewall-rules create speedcam-external \
-		--network=default \
-		--allow=tcp:8000,tcp:15672 \
-		--source-ranges=0.0.0.0/0 \
-		--target-tags=speedcam-web 2>/dev/null || true
+	@echo "  make build push restart-services  # Build, push, and restart (image update)"
+	@echo "  make tf-plan                      # Preview infrastructure changes"
+	@echo "  make tf-apply                     # Apply infrastructure changes"
+	@echo "  make TAG=v1.0.0 build push        # Build and push with specific tag"
 
 # =============================================================================
 # Build
@@ -123,140 +81,25 @@ push-alert: ## Push alert worker image
 	docker push $(ALERT_IMAGE)
 
 # =============================================================================
-# Deploy Infrastructure
+# Terraform (Infrastructure Management)
 # =============================================================================
 
-deploy-infra: deploy-rabbitmq deploy-mysql init-infra ## Deploy infrastructure (RabbitMQ, MySQL)
+TF_DIR = terraform
 
-deploy-rabbitmq: ## Deploy RabbitMQ instance
-	@echo "$(GREEN)Deploying RabbitMQ...$(NC)"
-	-gcloud compute instances delete speedcam-rabbitmq --zone=$(GCP_ZONE) --quiet 2>/dev/null || true
-	gcloud compute instances create-with-container speedcam-rabbitmq \
-		--zone=$(GCP_ZONE) \
-		--machine-type=e2-small \
-		--tags=speedcam,speedcam-web \
-		--container-image=rabbitmq:3.13-management \
-		--container-env="RABBITMQ_DEFAULT_USER=$(RABBITMQ_USER),RABBITMQ_DEFAULT_PASS=$(RABBITMQ_PASSWORD)"
+tf-init: ## Initialize Terraform
+	cd $(TF_DIR) && terraform init
 
-deploy-mysql: ## Deploy MySQL instance
-	@echo "$(GREEN)Deploying MySQL...$(NC)"
-	-gcloud compute instances delete speedcam-mysql --zone=$(GCP_ZONE) --quiet 2>/dev/null || true
-	gcloud compute instances create-with-container speedcam-mysql \
-		--zone=$(GCP_ZONE) \
-		--machine-type=e2-small \
-		--tags=speedcam \
-		--container-image=mysql:8.0 \
-		--container-env="MYSQL_ROOT_PASSWORD=root,MYSQL_USER=$(DB_USER),MYSQL_PASSWORD=$(DB_PASSWORD),MYSQL_DATABASE=speedcam"
+tf-plan: ## Preview infrastructure changes
+	cd $(TF_DIR) && terraform plan
 
-init-infra: ## Initialize infrastructure (MQTT plugin, databases)
-	@echo "$(YELLOW)Waiting for instances to start...$(NC)"
-	@sleep 60
-	@echo "$(GREEN)Enabling MQTT plugin...$(NC)"
-	gcloud compute ssh speedcam-rabbitmq --zone=$(GCP_ZONE) \
-		--command="docker exec \$$(docker ps -q) rabbitmq-plugins enable rabbitmq_mqtt" || true
-	@echo "$(GREEN)Creating databases...$(NC)"
-	gcloud compute ssh speedcam-mysql --zone=$(GCP_ZONE) \
-		--command="docker exec \$$(docker ps -q) mysql -u root -proot -e \"\
-			CREATE DATABASE IF NOT EXISTS speedcam_vehicles; \
-			CREATE DATABASE IF NOT EXISTS speedcam_detections; \
-			CREATE DATABASE IF NOT EXISTS speedcam_notifications; \
-			GRANT ALL PRIVILEGES ON speedcam_vehicles.* TO '$(DB_USER)'@'%'; \
-			GRANT ALL PRIVILEGES ON speedcam_detections.* TO '$(DB_USER)'@'%'; \
-			GRANT ALL PRIVILEGES ON speedcam_notifications.* TO '$(DB_USER)'@'%'; \
-			FLUSH PRIVILEGES;\"" || true
+tf-apply: ## Apply infrastructure changes
+	cd $(TF_DIR) && terraform apply
 
-# =============================================================================
-# Deploy Services
-# =============================================================================
+tf-destroy: ## Destroy all infrastructure
+	cd $(TF_DIR) && terraform destroy
 
-deploy-services: get-ips deploy-main deploy-ocr deploy-alert migrate ## Deploy all services
-
-get-ips: ## Get infrastructure internal IPs
-	$(eval RABBITMQ_IP := $(shell gcloud compute instances describe speedcam-rabbitmq --zone=$(GCP_ZONE) --format='get(networkInterfaces[0].networkIP)' 2>/dev/null))
-	$(eval MYSQL_IP := $(shell gcloud compute instances describe speedcam-mysql --zone=$(GCP_ZONE) --format='get(networkInterfaces[0].networkIP)' 2>/dev/null))
-	@echo "RabbitMQ IP: $(RABBITMQ_IP)"
-	@echo "MySQL IP: $(MYSQL_IP)"
-
-deploy-main: get-ips ## Deploy main service
-	@echo "$(GREEN)Deploying main service...$(NC)"
-	-gcloud compute instances delete speedcam-main --zone=$(GCP_ZONE) --quiet 2>/dev/null || true
-	gcloud compute instances create-with-container speedcam-main \
-		--zone=$(GCP_ZONE) \
-		--machine-type=e2-medium \
-		--tags=speedcam,speedcam-web \
-		--scopes=cloud-platform \
-		--container-image=$(MAIN_IMAGE) \
-		--container-env="\
-DJANGO_SETTINGS_MODULE=config.settings.dev,\
-DB_HOST=$(MYSQL_IP),DB_PORT=3306,\
-DB_NAME=speedcam,DB_NAME_VEHICLES=speedcam_vehicles,\
-DB_NAME_DETECTIONS=speedcam_detections,DB_NAME_NOTIFICATIONS=speedcam_notifications,\
-DB_USER=$(DB_USER),DB_PASSWORD=$(DB_PASSWORD),\
-CELERY_BROKER_URL=amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@$(RABBITMQ_IP):5672//,\
-RABBITMQ_HOST=$(RABBITMQ_IP),MQTT_PORT=1883,\
-MQTT_USER=$(RABBITMQ_USER),MQTT_PASS=$(RABBITMQ_PASSWORD),\
-OCR_MOCK=true,FCM_MOCK=true"
-
-deploy-ocr: get-ips ## Deploy OCR worker
-	@echo "$(GREEN)Deploying OCR worker...$(NC)"
-	-gcloud compute instances delete speedcam-ocr --zone=$(GCP_ZONE) --quiet 2>/dev/null || true
-	gcloud compute instances create-with-container speedcam-ocr \
-		--zone=$(GCP_ZONE) \
-		--machine-type=e2-medium \
-		--tags=speedcam \
-		--scopes=cloud-platform \
-		--container-image=$(OCR_IMAGE) \
-		--container-env="\
-DJANGO_SETTINGS_MODULE=config.settings.dev,\
-DB_HOST=$(MYSQL_IP),DB_PORT=3306,\
-DB_NAME=speedcam,DB_NAME_VEHICLES=speedcam_vehicles,\
-DB_NAME_DETECTIONS=speedcam_detections,DB_NAME_NOTIFICATIONS=speedcam_notifications,\
-DB_USER=$(DB_USER),DB_PASSWORD=$(DB_PASSWORD),\
-CELERY_BROKER_URL=amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@$(RABBITMQ_IP):5672//,\
-OCR_CONCURRENCY=2,OCR_MOCK=true"
-
-deploy-alert: get-ips ## Deploy alert worker
-	@echo "$(GREEN)Deploying alert worker...$(NC)"
-	-gcloud compute instances delete speedcam-alert --zone=$(GCP_ZONE) --quiet 2>/dev/null || true
-	gcloud compute instances create-with-container speedcam-alert \
-		--zone=$(GCP_ZONE) \
-		--machine-type=e2-small \
-		--tags=speedcam \
-		--scopes=cloud-platform \
-		--container-image=$(ALERT_IMAGE) \
-		--container-env="\
-DJANGO_SETTINGS_MODULE=config.settings.dev,\
-DB_HOST=$(MYSQL_IP),DB_PORT=3306,\
-DB_NAME=speedcam,DB_NAME_VEHICLES=speedcam_vehicles,\
-DB_NAME_DETECTIONS=speedcam_detections,DB_NAME_NOTIFICATIONS=speedcam_notifications,\
-DB_USER=$(DB_USER),DB_PASSWORD=$(DB_PASSWORD),\
-CELERY_BROKER_URL=amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@$(RABBITMQ_IP):5672//,\
-ALERT_CONCURRENCY=50,FCM_MOCK=true"
-
-migrate: ## Run Django migrations
-	@echo "$(YELLOW)Waiting for main service to start...$(NC)"
-	@sleep 45
-	@echo "$(GREEN)Running migrations...$(NC)"
-	gcloud compute ssh speedcam-main --zone=$(GCP_ZONE) \
-		--command="docker exec \$$(docker ps -q) python manage.py makemigrations vehicles detections notifications 2>/dev/null || true"
-	gcloud compute ssh speedcam-main --zone=$(GCP_ZONE) \
-		--command="docker exec \$$(docker ps -q) python manage.py migrate --database=default --noinput"
-	gcloud compute ssh speedcam-main --zone=$(GCP_ZONE) \
-		--command="docker exec \$$(docker ps -q) python manage.py migrate vehicles --database=vehicles_db --noinput"
-	gcloud compute ssh speedcam-main --zone=$(GCP_ZONE) \
-		--command="docker exec \$$(docker ps -q) python manage.py migrate detections --database=detections_db --noinput"
-	gcloud compute ssh speedcam-main --zone=$(GCP_ZONE) \
-		--command="docker exec \$$(docker ps -q) python manage.py migrate notifications --database=notifications_db --noinput"
-
-# =============================================================================
-# Full Deployment
-# =============================================================================
-
-deploy: setup build push deploy-infra deploy-services status ## Full deployment (setup + build + push + deploy)
-	@echo "$(GREEN)Deployment complete!$(NC)"
-
-deploy-quick: build push restart-services ## Quick deployment (build + push + restart)
-	@echo "$(GREEN)Quick deployment complete!$(NC)"
+tf-output: ## Show Terraform outputs
+	cd $(TF_DIR) && terraform output
 
 # =============================================================================
 # Operations
@@ -318,28 +161,29 @@ ssh-alert: ## SSH into alert instance
 # Cleanup
 # =============================================================================
 
-clean: clean-services clean-infra clean-firewall ## Clean all resources
+clean: ## Destroy infrastructure (use 'make tf-destroy' instead)
+	@echo "$(YELLOW)Infrastructure is now managed by Terraform.$(NC)"
+	@echo "$(YELLOW)Please use 'make tf-destroy' to destroy all resources.$(NC)"
 
-clean-services: ## Delete service instances
-	@echo "$(RED)Deleting service instances...$(NC)"
-	-gcloud compute instances delete speedcam-main speedcam-ocr speedcam-alert \
-		--zone=$(GCP_ZONE) --quiet 2>/dev/null || true
+clean-services: ## Note: Services are managed by Terraform
+	@echo "$(YELLOW)Services are now managed by Terraform.$(NC)"
+	@echo "$(YELLOW)Please use 'make tf-destroy' to destroy all resources.$(NC)"
 
-clean-infra: ## Delete infrastructure instances
-	@echo "$(RED)Deleting infrastructure instances...$(NC)"
-	-gcloud compute instances delete speedcam-rabbitmq speedcam-mysql \
-		--zone=$(GCP_ZONE) --quiet 2>/dev/null || true
+clean-infra: ## Note: Infrastructure is managed by Terraform
+	@echo "$(YELLOW)Infrastructure is now managed by Terraform.$(NC)"
+	@echo "$(YELLOW)Please use 'make tf-destroy' to destroy all resources.$(NC)"
 
-clean-firewall: ## Delete firewall rules
-	@echo "$(RED)Deleting firewall rules...$(NC)"
-	-gcloud compute firewall-rules delete speedcam-internal speedcam-external --quiet 2>/dev/null || true
+clean-firewall: ## Note: Firewall rules are managed by Terraform
+	@echo "$(YELLOW)Firewall rules are now managed by Terraform.$(NC)"
+	@echo "$(YELLOW)Please use 'make tf-destroy' to destroy all resources.$(NC)"
 
-clean-registry: ## Delete Artifact Registry
+clean-registry: ## Delete Artifact Registry (not managed by Terraform)
 	@echo "$(RED)Deleting Artifact Registry...$(NC)"
 	-gcloud artifacts repositories delete speedcam --location=$(GCP_REGION) --quiet 2>/dev/null || true
 
-clean-all: clean clean-registry ## Clean everything including registry
-	@echo "$(GREEN)All resources cleaned.$(NC)"
+clean-all: clean clean-registry ## Note: Infrastructure is managed by Terraform
+	@echo "$(YELLOW)Infrastructure is now managed by Terraform.$(NC)"
+	@echo "$(YELLOW)Use 'make tf-destroy' to destroy infrastructure, then 'make clean-registry' for registry.$(NC)"
 
 # =============================================================================
 # Local Development

@@ -109,6 +109,22 @@ services:
     networks:
       - speedcam-network
 
+  # ===========================================
+  # Monitoring (Optional)
+  # ===========================================
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:7
+    container_name: speedcam-datadog
+    profiles:
+      - monitoring
+    env_file:
+      - ../datadog.env
+    ports:
+      - "8125:8125/udp"
+      - "8126:8126"
+    networks:
+      - speedcam-network
+
 volumes:
   mysql_data:
   rabbitmq_data:
