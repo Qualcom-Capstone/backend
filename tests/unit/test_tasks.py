@@ -27,7 +27,7 @@ except ImportError:
     firebase_available = False
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestOCRTaskMock:
     """OCR Task Mock 테스트 (google.cloud 없이)"""
 
@@ -58,7 +58,7 @@ class TestOCRTaskMock:
         assert pending_detection.status == "completed"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestNotificationTaskMock:
     """Notification Task Mock 테스트 (firebase_admin 없이)"""
 
@@ -91,7 +91,7 @@ class TestNotificationTaskMock:
         assert result["status"] in ["sent", "skipped"]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestTaskErrorHandling:
     """Task 에러 핸들링 테스트 (모듈 의존성 없이)"""
 
@@ -126,14 +126,14 @@ class TestTaskErrorHandling:
         from apps.notifications.models import Notification
 
         notification = Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="test-token",
             title="테스트 알림",
             body="테스트 본문",
             status="pending",
         )
 
-        assert notification.detection == completed_detection
+        assert notification.detection_id == completed_detection.id
         assert notification.status == "pending"
 
         # sent로 상태 변경

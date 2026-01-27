@@ -16,7 +16,7 @@ def api_client():
     return Client()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestVehicleAPI:
     """Vehicle API 통합 테스트"""
 
@@ -77,7 +77,7 @@ class TestVehicleAPI:
         assert sample_vehicle.fcm_token == "new-fcm-token-updated"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestDetectionAPI:
     """Detection API 통합 테스트"""
 
@@ -121,7 +121,7 @@ class TestDetectionAPI:
             assert result["camera_id"] == sample_detection.camera_id
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestNotificationAPI:
     """Notification API 통합 테스트"""
 
@@ -129,7 +129,7 @@ class TestNotificationAPI:
     def sample_notification(self, db, completed_detection):
         """테스트용 Notification"""
         return Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="test-token",
             title="테스트 알림",
             body="테스트 내용",
@@ -162,7 +162,7 @@ class TestNotificationAPI:
             assert result["status"] == "sent"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestHealthEndpoints:
     """헬스체크 및 기본 엔드포인트 테스트"""
 
