@@ -136,9 +136,7 @@ class TestChoreographyPattern:
         )
 
         # 동일 Detection에 여러 알림 존재 확인 (MSA: ID 기반 조회)
-        notifications = Notification.objects.filter(
-            detection_id=completed_detection.id
-        )
+        notifications = Notification.objects.filter(detection_id=completed_detection.id)
         assert notifications.count() == 2
         assert notifications.filter(status="sent").count() == 1
 
