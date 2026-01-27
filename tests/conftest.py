@@ -45,7 +45,7 @@ def sample_vehicle_no_fcm(db):
 def sample_detection(db, sample_vehicle):
     """테스트용 Detection 생성"""
     return Detection.objects.create(
-        vehicle=sample_vehicle,
+        vehicle_id=sample_vehicle.id,
         camera_id="CAM-001",
         location="테스트 위치",
         detected_speed=85.5,
@@ -74,7 +74,7 @@ def pending_detection(db):
 def completed_detection(db, sample_vehicle):
     """Completed 상태의 Detection"""
     return Detection.objects.create(
-        vehicle=sample_vehicle,
+        vehicle_id=sample_vehicle.id,
         camera_id="CAM-TEST-002",
         location="완료 테스트 위치",
         detected_speed=100.0,

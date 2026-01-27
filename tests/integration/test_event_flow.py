@@ -33,7 +33,7 @@ except ImportError:
     firebase_available = False
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db(transaction=True, databases="__all__")
 class TestIngestionFlow:
     """
     Ingestion 플로우 테스트
@@ -74,7 +74,7 @@ class TestIngestionFlow:
         assert violation_amount == 35.0
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db(transaction=True, databases="__all__")
 class TestChoreographyPattern:
     """
     Choreography 패턴 테스트
@@ -82,10 +82,10 @@ class TestChoreographyPattern:
     """
 
     def test_detection_to_notification_data_flow(self, sample_vehicle):
-        """Detection → Notification 데이터 흐름 테스트"""
+        """Detection → Notification 데이터 흐름 테스트 (MSA: ID 참조)"""
         # Detection 생성 및 완료
         detection = Detection.objects.create(
-            vehicle=sample_vehicle,
+            vehicle_id=sample_vehicle.id,
             camera_id="CAM-FLOW-001",
             location="흐름 테스트",
             detected_speed=90.0,
@@ -100,15 +100,15 @@ class TestChoreographyPattern:
 
         # Notification 생성
         notification = Notification.objects.create(
-            detection=detection,
+            detection_id=detection.id,
             fcm_token=sample_vehicle.fcm_token,
             title=f"과속 위반: {detection.ocr_result}",
             body=f"속도: {detection.detected_speed}km/h",
             status="sent",
         )
 
-        # 데이터 연결 확인
-        assert notification.detection == detection
+        # 데이터 연결 확인 (MSA: ID 기반 참조)
+        assert notification.detection_id == detection.id
         assert notification.fcm_token == sample_vehicle.fcm_token
         assert detection.ocr_result in notification.title
 
@@ -116,7 +116,7 @@ class TestChoreographyPattern:
         """하나의 Detection에 여러 Notification (재시도) 테스트"""
         # 첫 번째 알림 (실패)
         Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="token-1",
             title="알림 1",
             body="본문 1",
@@ -127,7 +127,7 @@ class TestChoreographyPattern:
 
         # 두 번째 알림 (재시도 - 성공)
         Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="token-1",
             title="알림 1",
             body="본문 1",
@@ -135,13 +135,15 @@ class TestChoreographyPattern:
             retry_count=1,
         )
 
-        # 동일 Detection에 여러 알림 존재 확인
-        notifications = completed_detection.notifications.all()
+        # 동일 Detection에 여러 알림 존재 확인 (MSA: ID 기반 조회)
+        notifications = Notification.objects.filter(
+            detection_id=completed_detection.id
+        )
         assert notifications.count() == 2
         assert notifications.filter(status="sent").count() == 1
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db(transaction=True, databases="__all__")
 class TestErrorHandling:
     """에러 핸들링 및 재시도 로직 테스트"""
 
@@ -167,12 +169,16 @@ class TestErrorHandling:
             status="completed",
         )
 
-        # vehicle이 None인지 확인
-        assert detection.vehicle is None
+        # vehicle_id가 None인지 확인 (MSA: BigIntegerField)
+        assert detection.vehicle_id is None
 
-        # 알림을 생성하려면 FCM 토큰이 필요
-        # vehicle이 없으면 FCM 토큰도 없음
-        fcm_token = detection.vehicle.fcm_token if detection.vehicle else None
+        # vehicle_id가 없으면 FCM 토큰 조회 불가
+        fcm_token = None
+        if detection.vehicle_id:
+            from apps.vehicles.models import Vehicle
+
+            vehicle = Vehicle.objects.filter(id=detection.vehicle_id).first()
+            fcm_token = vehicle.fcm_token if vehicle else None
         assert fcm_token is None
 
     def test_detection_status_failed(self):
@@ -197,12 +203,12 @@ class TestErrorHandling:
         assert "Invalid image format" in detection.error_message
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db(transaction=True, databases="__all__")
 class TestEndToEndDataIntegrity:
     """End-to-End 데이터 무결성 테스트"""
 
     def test_complete_data_flow(self, sample_vehicle):
-        """전체 데이터 흐름 무결성 테스트"""
+        """전체 데이터 흐름 무결성 테스트 (MSA: ID 기반 참조)"""
         # 1. Detection 생성 (Ingestion)
         detection = Detection.objects.create(
             camera_id="CAM-E2E-001",
@@ -220,14 +226,14 @@ class TestEndToEndDataIntegrity:
 
         detection.ocr_result = sample_vehicle.plate_number
         detection.ocr_confidence = 0.95
-        detection.vehicle = sample_vehicle
+        detection.vehicle_id = sample_vehicle.id
         detection.processed_at = timezone.now()
         detection.status = "completed"
         detection.save()
 
         # 3. Notification 생성
         notification = Notification.objects.create(
-            detection=detection,
+            detection_id=detection.id,
             fcm_token=sample_vehicle.fcm_token,
             title=f"⚠️ 과속 위반 감지: {detection.ocr_result}",
             body=f"📍 위치: {detection.location}\n🚗 속도: {detection.detected_speed}km/h",
@@ -237,13 +243,17 @@ class TestEndToEndDataIntegrity:
 
         # 검증
         assert detection.status == "completed"
-        assert detection.vehicle == sample_vehicle
+        assert detection.vehicle_id == sample_vehicle.id
         assert notification.status == "sent"
 
-        # 관계 확인
-        assert notification.detection == detection
-        assert detection in sample_vehicle.detections.all()
-        assert notification in detection.notifications.all()
+        # 관계 확인 (MSA: ID 기반 조회)
+        assert notification.detection_id == detection.id
+        assert Detection.objects.filter(
+            vehicle_id=sample_vehicle.id, id=detection.id
+        ).exists()
+        assert Notification.objects.filter(
+            detection_id=detection.id, id=notification.id
+        ).exists()
 
     def test_statistics_calculation(self, sample_vehicle):
         """통계 계산 테스트"""
@@ -251,7 +261,7 @@ class TestEndToEndDataIntegrity:
         speeds = [75.0, 85.0, 95.0, 105.0]
         for i, speed in enumerate(speeds):
             Detection.objects.create(
-                vehicle=sample_vehicle,
+                vehicle_id=sample_vehicle.id,
                 camera_id=f"CAM-STAT-{i}",
                 location="통계 테스트",
                 detected_speed=speed,
@@ -271,7 +281,7 @@ class TestEndToEndDataIntegrity:
         assert pending >= 2
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db(transaction=True, databases="__all__")
 @pytest.mark.skipif(
     not (google_available and firebase_available),
     reason="Requires google.cloud and firebase_admin",

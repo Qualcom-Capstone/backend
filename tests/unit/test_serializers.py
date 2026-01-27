@@ -13,7 +13,7 @@ from apps.notifications.serializers import (
 from apps.vehicles.serializers import VehicleSerializer
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestVehicleSerializer:
     """Vehicle Serializer 테스트"""
 
@@ -52,7 +52,7 @@ class TestVehicleSerializer:
         assert "plate_number" in serializer.errors
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestDetectionSerializer:
     """Detection Serializer 테스트"""
 
@@ -75,15 +75,15 @@ class TestDetectionSerializer:
         assert data["ocr_result"] == "12가3456"
         assert data["processed_at"] is not None
 
-    def test_detection_with_vehicle_plate(self, sample_detection, sample_vehicle):
-        """Vehicle이 연결된 Detection 직렬화 테스트 (ListSerializer)"""
+    def test_detection_with_vehicle_id(self, sample_detection, sample_vehicle):
+        """Vehicle이 연결된 Detection 직렬화 테스트 (ListSerializer, MSA: vehicle_id)"""
         serializer = DetectionListSerializer(sample_detection)
         data = serializer.data
 
-        assert data["vehicle_plate"] == "12가3456"
+        assert data["vehicle_id"] == sample_vehicle.id
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestNotificationSerializer:
     """Notification Serializer 테스트"""
 
@@ -92,7 +92,7 @@ class TestNotificationSerializer:
         from apps.notifications.models import Notification
 
         notification = Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="test-token",
             title="테스트 알림",
             body="테스트 내용",
@@ -105,14 +105,14 @@ class TestNotificationSerializer:
 
         assert data["title"] == "테스트 알림"
         assert data["status"] == "sent"
-        assert data["detection"] == completed_detection.id
+        assert data["detection_id"] == completed_detection.id
 
     def test_serialize_notification_list(self, completed_detection, db):
         """Notification List 직렬화 테스트"""
         from apps.notifications.models import Notification
 
         notification = Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="test-token",
             title="리스트 알림",
             body="테스트 내용",

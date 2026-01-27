@@ -5,11 +5,12 @@ Unit Tests for Django Models
 import pytest
 from django.db import IntegrityError
 
+from apps.detections.models import Detection
 from apps.notifications.models import Notification
 from apps.vehicles.models import Vehicle
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestVehicleModel:
     """Vehicle 모델 테스트"""
 
@@ -38,7 +39,7 @@ class TestVehicleModel:
         assert sample_vehicle.updated_at is not None
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestDetectionModel:
     """Detection 모델 테스트"""
 
@@ -69,9 +70,11 @@ class TestDetectionModel:
         assert pending_detection.status == "completed"
 
     def test_detection_vehicle_relation(self, sample_detection, sample_vehicle):
-        """Detection-Vehicle 관계 테스트"""
-        assert sample_detection.vehicle == sample_vehicle
-        assert sample_detection in sample_vehicle.detections.all()
+        """Detection-Vehicle 관계 테스트 (MSA: BigIntegerField ID 참조)"""
+        assert sample_detection.vehicle_id == sample_vehicle.id
+        assert Detection.objects.filter(
+            vehicle_id=sample_vehicle.id, id=sample_detection.id
+        ).exists()
 
     def test_detection_speed_violation(self, sample_detection):
         """과속 여부 확인"""
@@ -79,19 +82,19 @@ class TestDetectionModel:
 
     def test_detection_nullable_fields(self, pending_detection):
         """Nullable 필드 테스트"""
-        assert pending_detection.vehicle is None
+        assert pending_detection.vehicle_id is None
         assert pending_detection.ocr_result is None
         assert pending_detection.processed_at is None
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(databases="__all__")
 class TestNotificationModel:
     """Notification 모델 테스트"""
 
     def test_create_notification(self, completed_detection, db):
         """Notification 생성 테스트"""
         notification = Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="test-token",
             title="테스트 알림",
             body="테스트 내용",
@@ -103,7 +106,7 @@ class TestNotificationModel:
     def test_notification_str(self, completed_detection, db):
         """Notification __str__ 테스트"""
         notification = Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="test-token",
             title="테스트 알림",
             body="테스트 내용",
@@ -116,7 +119,7 @@ class TestNotificationModel:
     def test_notification_retry_count(self, completed_detection, db):
         """재시도 횟수 테스트"""
         notification = Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="test-token",
             title="테스트 알림",
             body="테스트 내용",
@@ -131,13 +134,15 @@ class TestNotificationModel:
         assert notification.retry_count == 1
 
     def test_notification_detection_relation(self, completed_detection, db):
-        """Notification-Detection 관계 테스트"""
+        """Notification-Detection 관계 테스트 (MSA: BigIntegerField ID 참조)"""
         notification = Notification.objects.create(
-            detection=completed_detection,
+            detection_id=completed_detection.id,
             fcm_token="test-token",
             title="테스트 알림",
             body="테스트 내용",
             status="sent",
         )
-        assert notification.detection == completed_detection
-        assert notification in completed_detection.notifications.all()
+        assert notification.detection_id == completed_detection.id
+        assert Notification.objects.filter(
+            detection_id=completed_detection.id, id=notification.id
+        ).exists()
