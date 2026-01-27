@@ -74,5 +74,6 @@ locals {
     DD_LOGS_INJECTION        = "true"
     DD_TRACE_SAMPLE_RATE     = "1"
     DD_PROFILING_ENABLED     = "true"
+    _DD_TRACE_WRITER_NATIVE  = "false"
   }
 }
