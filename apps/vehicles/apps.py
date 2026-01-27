@@ -2,7 +2,6 @@ from django.apps import AppConfig
 
 
 class VehiclesConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'apps.vehicles'
-    verbose_name = '차량 관리'
-
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "apps.vehicles"
+    verbose_name = "차량 관리"

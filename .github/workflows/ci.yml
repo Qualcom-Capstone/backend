@@ -39,11 +39,7 @@ jobs:
         run: pip install flake8==7.1.1 black==24.10.0 isort==5.13.2
 
       - name: Run flake8
-        run: |
-          flake8 . \
-            --exclude=.venv,migrations,__pycache__,.git \
-            --max-line-length=120 \
-            --count --show-source --statistics
+        run: flake8 . --count --show-source --statistics
 
       - name: Run black (check)
         run: black --check --diff --exclude='/(\.venv|migrations)/' .
