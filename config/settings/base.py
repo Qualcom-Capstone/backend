@@ -1,6 +1,7 @@
 # config/settings/base.py
 import os
 from pathlib import Path
+
 import pymysql
 
 pymysql.install_as_MySQLdb()
@@ -10,10 +11,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 SECRET_KEY = os.getenv("SECRET_KEY", "insecure-key-change-in-production")
 
 # GCS (Google Cloud Storage) 설정
-GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'your-bucket-name')
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "your-bucket-name")
 
 # Firebase 설정
-FIREBASE_CREDENTIALS = os.getenv('FIREBASE_CREDENTIALS')
+FIREBASE_CREDENTIALS = os.getenv("FIREBASE_CREDENTIALS")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -75,19 +76,19 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_URL = "/media/"
+MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # REST Framework
 REST_FRAMEWORK = {
-    'DEFAULT_FILTER_BACKENDS': [
-        'django_filters.rest_framework.DjangoFilterBackend',
-        'rest_framework.filters.OrderingFilter',
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.OrderingFilter",
     ],
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20,
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
 }
 
 # Swagger
@@ -105,12 +106,12 @@ SWAGGER_SETTINGS = {
 # ==================================================
 # Celery 설정
 # ==================================================
-CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'amqp://sa:1234@rabbitmq:5672//')
-CELERY_RESULT_BACKEND = 'rpc://'
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'Asia/Seoul'
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "amqp://sa:1234@rabbitmq:5672//")
+CELERY_RESULT_BACKEND = "rpc://"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = "Asia/Seoul"
 CELERY_ENABLE_UTC = True
 
 # 안정성 설정
@@ -134,16 +135,15 @@ CELERYD_HIJACK_ROOT_LOGGER = False
 CELERYD_REDIRECT_STDOUTS = False
 
 # Flower 관리자 계정
-CELERY_FLOWER_USER = os.getenv('CELERY_FLOWER_USER', 'admin')
-CELERY_FLOWER_PASSWORD = os.getenv('CELERY_FLOWER_PASSWORD', 'admin')
+CELERY_FLOWER_USER = os.getenv("CELERY_FLOWER_USER", "admin")
+CELERY_FLOWER_PASSWORD = os.getenv("CELERY_FLOWER_PASSWORD", "admin")
 
 # ==================================================
 # CORS 설정
 # ==================================================
 CORS_ALLOWED_ORIGINS = os.getenv(
-    'CORS_ALLOWED_ORIGINS',
-    'http://localhost:5173,http://localhost:3000'
-).split(',')
+    "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"
+).split(",")
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -151,34 +151,34 @@ CORS_ALLOW_CREDENTIALS = True
 # Logging 설정
 # ==================================================
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} {module} {message}',
-            'style': '{',
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {message}",
+            "style": "{",
         },
     },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
         },
     },
-    'root': {
-        'handlers': ['console'],
-        'level': 'INFO',
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
     },
-    'loggers': {
-        'django': {
-            'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': False,
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
         },
-        'celery': {
-            'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': False,
+        "celery": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
         },
     },
 }
