@@ -1,27 +1,188 @@
-name: CI - Build & Push celery Image
+name: CI
 
 on:
   push:
-    branches: [ develop ]
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-push:
+  # ===========================================
+  # 1. Code Quality (Lint)
+  # ===========================================
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-lint-${{ hashFiles('requirements/dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-lint-
+
+      - name: Install lint dependencies
+        run: pip install flake8==7.1.1 black==24.10.0 isort==5.13.2
+
+      - name: Run flake8
+        run: |
+          flake8 . \
+            --exclude=.venv,migrations,__pycache__,.git \
+            --max-line-length=120 \
+            --count --show-source --statistics
+
+      - name: Run black (check)
+        run: black --check --diff --exclude='/(\.venv|migrations)/' .
+
+      - name: Run isort (check)
+        run: isort --check-only --diff --profile black --skip .venv --skip migrations .
+
+  # ===========================================
+  # 2. Tests (pytest + MySQL)
+  # ===========================================
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: testpass
+          MYSQL_DATABASE: speedcam
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+          --health-start-period=30s
+
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: testpass
+      DB_NAME: speedcam
+      DB_NAME_VEHICLES: speedcam_vehicles
+      DB_NAME_DETECTIONS: speedcam_detections
+      DB_NAME_NOTIFICATIONS: speedcam_notifications
+      CELERY_BROKER_URL: memory://
+      SECRET_KEY: ci-test-secret-key
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-test-${{ hashFiles('requirements/test.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-test-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-libmysqlclient-dev pkg-config
+
+      - name: Install Python dependencies
+        run: pip install -r requirements/test.txt
+
+      - name: Create MSA databases
+        run: |
+          mysql -h 127.0.0.1 -u root -ptestpass -e "
+            CREATE DATABASE IF NOT EXISTS speedcam_vehicles CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            CREATE DATABASE IF NOT EXISTS speedcam_detections CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            CREATE DATABASE IF NOT EXISTS speedcam_notifications CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            ALTER DATABASE speedcam CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+          "
+
+      - name: Run migrations
+        run: |
+          python manage.py migrate --database=default
+          python manage.py migrate --database=vehicles_db
+          python manage.py migrate --database=detections_db
+          python manage.py migrate --database=notifications_db
+
+      - name: Run tests
+        run: |
+          pytest \
+            --cov=apps \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --junitxml=test-results.xml \
+            -v --tb=short
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+
+  # ===========================================
+  # 3. Docker Build (빌드 검증)
+  # ===========================================
+  docker-build:
+    name: Docker Build (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    needs: lint
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: main
+            dockerfile: docker/Dockerfile.main
+          - name: ocr
+            dockerfile: docker/Dockerfile.ocr
+          - name: alert
+            dockerfile: docker/Dockerfile.alert
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
+      - name: Build ${{ matrix.service.name }} image
+        uses: docker/build-push-action@v6
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and push celery image
-        run: |
-          docker build -f Dockerfile-celery -t ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_CELERY_NAME }}:latest .
-          docker push ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_CELERY_NAME }}:latest
+          context: .
+          file: ${{ matrix.service.dockerfile }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+          tags: speedcam/${{ matrix.service.name }}:ci-${{ github.sha }}
