@@ -30,13 +30,9 @@ resource "google_artifact_registry_repository" "speedcam" {
     id     = "keep-recent-tagged"
     action = "KEEP"
 
-    condition {
-      tag_state    = "TAGGED"
-      tag_prefixes = ["v", "latest"]
-    }
-
     most_recent_versions {
       keep_count = 10
+      package_name_prefixes = ["main", "ocr", "alert"]
     }
   }
 }
