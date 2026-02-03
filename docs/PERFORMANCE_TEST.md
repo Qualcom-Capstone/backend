@@ -44,8 +44,8 @@ Edge Device(Raspberry Pi) 없이 시스템의 성능과 안정성을 검증하�
 │  │   Monitoring    │         │     Mock Services               │   │
 │  │                 │         │                                 │   │
 │  │ - Grafana       │◀────────│  - GCS Mock (MinIO)            │   │
-│  │ - InfluxDB      │         │  - FCM Mock (WireMock)          │   │
-│  │ - DataDog       │         │                                 │   │
+│  │ - Prometheus    │         │  - FCM Mock (WireMock)          │   │
+│  │                 │         │                                 │   │
 │  └─────────────────┘         └─────────────────────────────────┘   │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
@@ -161,43 +161,21 @@ services:
     networks:
       - test-network
 
-  # Monitoring
-  influxdb:
-    image: influxdb:1.8
-    environment:
-      INFLUXDB_DB: k6
-    ports:
-      - "8086:8086"
-    networks:
-      - test-network
-
-  grafana:
-    image: grafana/grafana:10.2.0
-    environment:
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_BASIC_ENABLED=false
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
-    depends_on:
-      - influxdb
-    networks:
-      - test-network
-
-  # K6 Runner
+  # K6 Runner (Prometheus remote write로 결과 전송)
   k6:
     image: grafana/k6:latest
     volumes:
       - ./k6:/scripts
     environment:
-      - K6_OUT=influxdb=http://influxdb:8086/k6
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "true"
+      MAIN_SERVICE_URL: http://main:8000
+      MQTT_BROKER: tcp://rabbitmq:1883
+      MQTT_USER: sa
+      MQTT_PASS: "1234"
     networks:
       - test-network
     depends_on:
-      - influxdb
       - main
 
 networks:
@@ -886,27 +864,58 @@ curl http://localhost:8000/health/
 ### 6.2 K6 테스트 실행
 
 ```bash
-# Smoke Test (1분)
-docker compose -f docker-compose.test.yml run k6 run /scripts/tests/smoke.js
+# 기본: 별도 테스트 환경 (docker-compose.test.yml)
+docker compose -f docker-compose.test.yml run k6 run --out experimental-prometheus-rw /scripts/tests/smoke.js
+
+# 또는: 실제 환경 + 모니터링 스택 사용
+cd docker
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
+  run k6 run --out experimental-prometheus-rw /scripts/tests/smoke.js
 
 # Load Test (10분)
-docker compose -f docker-compose.test.yml run k6 run /scripts/tests/load.js
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
+  run k6 run --out experimental-prometheus-rw /scripts/tests/load.js
 
 # Stress Test (37분)
-docker compose -f docker-compose.test.yml run k6 run /scripts/tests/stress.js
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
+  run k6 run --out experimental-prometheus-rw /scripts/tests/stress.js
 
 # Spike Test (9분)
-docker compose -f docker-compose.test.yml run k6 run /scripts/tests/spike.js
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
+  run k6 run --out experimental-prometheus-rw /scripts/tests/spike.js
 
 # Soak Test (4시간+)
-docker compose -f docker-compose.test.yml run k6 run /scripts/tests/soak.js
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
+  run k6 run --out experimental-prometheus-rw /scripts/tests/soak.js
 ```
 
 ### 6.3 결과 확인
 
-- **Grafana Dashboard**: http://localhost:3000
+- **Grafana Dashboard**: http://localhost:3000 (admin/admin)
+- **Prometheus Targets**: http://localhost:9090/targets (모든 타겟 UP 확인)
+- **Jaeger Tracing**: http://localhost:16686 (분산 트레이스)
 - **RabbitMQ Management**: http://localhost:15672 (sa/1234)
 - **Flower (Celery)**: http://localhost:5555
+
+### 6.4 K6 결과를 Prometheus에서 확인
+
+K6는 `--out experimental-prometheus-rw`로 결과를 Prometheus에 직접 기록합니다.
+
+```promql
+# 초당 요청 수
+rate(k6_http_reqs_total[1m])
+
+# p95 응답 시간
+histogram_quantile(0.95, rate(k6_http_req_duration_seconds_bucket[1m]))
+
+# 현재 VU 수
+k6_vus
+
+# 에러율
+rate(k6_http_req_failed_total[1m])
+```
+
+부하 테스트 중 Grafana에서 실시간 모니터링 가능 — 상세 PromQL은 `docs/MONITORING.md` 참조.
 
 ---
 
@@ -942,70 +951,20 @@ docker compose -f docker-compose.test.yml run k6 run /scripts/tests/soak.js
 
 ### 7.4 Grafana Dashboard JSON
 
-**grafana/dashboards/k6-performance.json**
-```json
-{
-  "dashboard": {
-    "title": "K6 Performance Test Dashboard",
-    "panels": [
-      {
-        "title": "Virtual Users",
-        "type": "graph",
-        "targets": [
-          {
-            "query": "SELECT mean(\"value\") FROM \"k6_vus\" WHERE $timeFilter GROUP BY time(10s)",
-            "alias": "VUs"
-          }
-        ]
-      },
-      {
-        "title": "HTTP Request Duration (p95)",
-        "type": "graph",
-        "targets": [
-          {
-            "query": "SELECT percentile(\"value\", 95) FROM \"k6_http_req_duration\" WHERE $timeFilter GROUP BY time(10s)",
-            "alias": "p95"
-          }
-        ]
-      },
-      {
-        "title": "MQTT Publish Duration",
-        "type": "graph",
-        "targets": [
-          {
-            "query": "SELECT mean(\"value\") FROM \"k6_mqtt_publish_duration\" WHERE $timeFilter GROUP BY time(10s)",
-            "alias": "mean"
-          }
-        ]
-      },
-      {
-        "title": "Error Rate",
-        "type": "graph",
-        "targets": [
-          {
-            "query": "SELECT sum(\"value\") FROM \"k6_http_req_failed\" WHERE $timeFilter GROUP BY time(10s)",
-            "alias": "HTTP Errors"
-          },
-          {
-            "query": "SELECT sum(\"value\") FROM \"k6_mqtt_publish_failed\" WHERE $timeFilter GROUP BY time(10s)",
-            "alias": "MQTT Errors"
-          }
-        ]
-      },
-      {
-        "title": "Requests per Second",
-        "type": "graph",
-        "targets": [
-          {
-            "query": "SELECT count(\"value\") FROM \"k6_http_reqs\" WHERE $timeFilter GROUP BY time(1s)",
-            "alias": "RPS"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+Grafana에서 Prometheus 데이터소스로 K6 대시보드를 구성합니다.
+
+**주요 패널 PromQL 쿼리:**
+
+| 패널 | PromQL |
+|------|--------|
+| Virtual Users | `k6_vus` |
+| HTTP p95 Duration | `histogram_quantile(0.95, rate(k6_http_req_duration_seconds_bucket[30s]))` |
+| Requests/sec | `rate(k6_http_reqs_total[30s])` |
+| Error Rate | `rate(k6_http_req_failed_total[30s]) / rate(k6_http_reqs_total[30s])` |
+| MQTT Publish Duration | `rate(k6_mqtt_publish_duration_sum[30s]) / rate(k6_mqtt_publish_duration_count[30s])` |
+
+또는 Grafana 공식 K6 대시보드 (ID: `19665`)를 import하여 사용할 수 있습니다.
+Grafana → Dashboards → Import → Dashboard ID `19665` 입력
 
 ---
 
