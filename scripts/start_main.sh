@@ -45,7 +45,9 @@ start_mqtt_subscriber()
 
 # Gunicorn 시작
 echo "Starting Gunicorn..."
-ddtrace-run gunicorn config.wsgi:application \
+opentelemetry-instrument \
+    --service_name speedcam-api \
+    gunicorn config.wsgi:application \
     --bind 0.0.0.0:8000 \
     --workers ${GUNICORN_WORKERS:-4} \
     --threads ${GUNICORN_THREADS:-2} \
