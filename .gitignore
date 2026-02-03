@@ -72,12 +72,10 @@ Thumbs.db
 # mypy
 .mypy_cache/
 
-# Terraform
-terraform/.terraform/
-terraform/terraform.tfstate
-terraform/terraform.tfstate.backup
-terraform/terraform.tfvars
-terraform/tfplan
+# Monitoring volumes
+docker/monitoring/grafana/data/
+docker/monitoring/prometheus/data/
+docker/monitoring/loki/data/
 
 # Claude Code
 .claude/
