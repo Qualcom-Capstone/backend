@@ -4,7 +4,9 @@ set -e
 echo "Starting OCR Worker (Celery)..."
 
 # Celery Worker 시작 (prefork pool - CPU 집약적)
-ddtrace-run celery -A config worker \
+opentelemetry-instrument \
+    --service_name speedcam-ocr \
+    celery -A config worker \
     --pool=prefork \
     --concurrency=${OCR_CONCURRENCY:-4} \
     --queues=ocr_queue \

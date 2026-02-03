@@ -24,6 +24,14 @@ pytz==2025.1
 drf-yasg==1.21.10
 PyYAML==6.0.2
 
-# APM
-ddtrace
+# Observability (OpenTelemetry)
+opentelemetry-distro
+opentelemetry-exporter-otlp
+opentelemetry-instrumentation-django
+opentelemetry-instrumentation-celery
+opentelemetry-instrumentation-pymysql
+opentelemetry-instrumentation-requests
+opentelemetry-instrumentation-logging
 
+# Prometheus Metrics
+django-prometheus
