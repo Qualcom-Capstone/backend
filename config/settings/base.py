@@ -160,6 +160,7 @@ LOGGING = {
         "verbose": {
             "format": "{levelname} {asctime} {module} [trace_id={otelTraceID} span_id={otelSpanID}] {message}",
             "style": "{",
+            "defaults": {"otelTraceID": "0", "otelSpanID": "0"},
         },
     },
     "handlers": {
