@@ -10,7 +10,6 @@ import argparse
 import json
 import os
 import random
-import sys
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -126,7 +125,7 @@ def print_stats():
 
 def run_load_test(workers, rate_per_worker, duration):
     """Run the load test with multiple workers."""
-    print(f"\n MQTT Load Test Starting")
+    print("\n MQTT Load Test Starting")
     print(f"  Host: {MQTT_HOST}:{MQTT_PORT}")
     print(f"  Workers: {workers}")
     print(f"  Rate: {rate_per_worker}/s per worker ({workers * rate_per_worker}/s total)")
