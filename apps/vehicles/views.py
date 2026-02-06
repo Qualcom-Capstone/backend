@@ -1,3 +1,6 @@
+import logging
+import os
+
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,6 +11,8 @@ from .serializers import (
     VehicleCreateSerializer,
     VehicleSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class VehicleViewSet(viewsets.ModelViewSet):
@@ -57,6 +62,21 @@ class VehicleViewSet(viewsets.ModelViewSet):
         vehicle, created = Vehicle.objects.using("vehicles_db").update_or_create(
             plate_number=plate_number, defaults={"fcm_token": fcm_token}
         )
+
+        # Dashboard 토큰은 FCM 토픽에 구독
+        if plate_number == "DASHBOARD":
+            try:
+                FCM_MOCK = os.getenv("FCM_MOCK", "false").lower() == "true"
+                if FCM_MOCK:
+                    logger.info("[MOCK] Would subscribe token to dashboard_alerts topic")
+                else:
+                    from core.firebase.fcm import get_fcm_client
+
+                    fcm_client = get_fcm_client()
+                    fcm_client.subscribe_to_topic([fcm_token], "dashboard_alerts")
+                    logger.info("Dashboard token subscribed to dashboard_alerts topic")
+            except Exception as e:
+                logger.warning(f"Failed to subscribe dashboard token to topic: {e}")
 
         return Response(
             VehicleSerializer(vehicle).data,
