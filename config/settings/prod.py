@@ -67,7 +67,5 @@ DATABASE_ROUTERS = ["config.db_router.MSADatabaseRouter"]
 # ==================================================
 # CORS 설정
 # ==================================================
-CORS_ALLOWED_ORIGINS = os.getenv(
-    "CORS_ALLOWED_ORIGINS", ""
-).split(",")
+CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
 CORS_ALLOW_CREDENTIALS = True
