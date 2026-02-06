@@ -6,6 +6,7 @@ import os
 
 import paho.mqtt.client as mqtt
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +68,13 @@ class MQTTSubscriber:
             from apps.detections.models import Detection
             from tasks.ocr_tasks import process_ocr
 
-            # 1. Detection 레코드 생성 (status=pending)
-            detection = Detection.objects.create(
+            # 1. Detection 레코드 생성 (status=pending, detections_db)
+            detection = Detection.objects.using("detections_db").create(
                 camera_id=payload.get("camera_id"),
                 location=payload.get("location"),
                 detected_speed=payload["detected_speed"],
                 speed_limit=payload.get("speed_limit", 60.0),
-                detected_at=payload.get("detected_at", timezone.now()),
+                detected_at=self._parse_detected_at(payload.get("detected_at")),
                 image_gcs_uri=payload["image_gcs_uri"],
                 status="pending",
             )
@@ -97,6 +98,23 @@ class MQTTSubscriber:
         except Exception as e:
             logger.error(f"Error processing MQTT message: {e}")
 
+    @staticmethod
+    def _parse_detected_at(value):
+        """detected_at 문자열을 datetime으로 파싱"""
+        if value is None:
+            return timezone.now()
+        if isinstance(value, str):
+            parsed = parse_datetime(value)
+            if parsed is None:
+                logger.warning(
+                    f"Invalid detected_at format: {value}, using current time"
+                )
+                return timezone.now()
+            if timezone.is_naive(parsed):
+                parsed = timezone.make_aware(parsed)
+            return parsed
+        return value
+
     def start(self):
         """MQTT Subscriber 시작 (blocking)"""
         host = os.getenv("RABBITMQ_HOST", "rabbitmq")
@@ -117,7 +135,21 @@ class MQTTSubscriber:
         logger.info("MQTT Subscriber stopped")
 
 
-def start_mqtt_subscriber():
-    """편의 함수: MQTT Subscriber 시작"""
+def start_mqtt_subscriber(blocking=True):
+    """
+    MQTT Subscriber 시작
+
+    Args:
+        blocking: True면 현재 스레드에서 블로킹 실행,
+                  False면 daemon 스레드에서 백그라운드 실행
+    """
     subscriber = MQTTSubscriber()
-    subscriber.start()
+    if blocking:
+        subscriber.start()
+    else:
+        import threading
+
+        thread = threading.Thread(target=subscriber.start, daemon=True)
+        thread.start()
+        logger.info("MQTT Subscriber started in background thread")
+    return subscriber

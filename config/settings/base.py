@@ -107,7 +107,7 @@ SWAGGER_SETTINGS = {
 }
 
 # ==================================================
-# Celery 설정
+# Celery 설정 (config_from_object namespace="CELERY"로 자동 로딩)
 # ==================================================
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "amqp://sa:1234@rabbitmq:5672//")
 CELERY_RESULT_BACKEND = "rpc://"
@@ -134,8 +134,8 @@ CELERY_TASK_QUEUE_MAX_PRIORITY = 10
 CELERY_TASK_DEFAULT_PRIORITY = 5
 
 # 로그 설정
-CELERYD_HIJACK_ROOT_LOGGER = False
-CELERYD_REDIRECT_STDOUTS = False
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+CELERY_WORKER_REDIRECT_STDOUTS = False
 
 # Flower 관리자 계정
 CELERY_FLOWER_USER = os.getenv("CELERY_FLOWER_USER", "admin")

@@ -42,27 +42,16 @@ class MSADatabaseRouter:
         """
         두 객체 간의 관계 허용 여부
 
-        MSA에서는 서비스 간 직접 FK 관계를 권장하지 않지만,
-        현재 구조에서는 Detection → Vehicle 관계가 있으므로 허용.
-        향후 이벤트 기반 참조로 전환 권장.
+        MSA 원칙: 서비스 간 직접 FK 관계 불허.
+        서비스 간 참조는 BigIntegerField ID Reference 패턴 사용.
         """
-        # 같은 DB에 있으면 항상 허용
         db1 = self._get_db_for_app(obj1._meta.app_label)
         db2 = self._get_db_for_app(obj2._meta.app_label)
 
         if db1 == db2:
             return True
 
-        # vehicles-detections 관계 허용 (FK)
-        apps = {obj1._meta.app_label, obj2._meta.app_label}
-        if apps == {"vehicles", "detections"}:
-            return True
-
-        # detections-notifications 관계 허용 (FK)
-        if apps == {"detections", "notifications"}:
-            return True
-
-        return None  # 다른 경우는 기본 라우터에 위임
+        return False
 
     def allow_migrate(self, db, app_label, model_name=None, **hints):
         """

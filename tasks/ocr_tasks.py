@@ -12,6 +12,20 @@ logger = logging.getLogger(__name__)
 # Mock 모드 (테스트용)
 OCR_MOCK = os.getenv("OCR_MOCK", "false").lower() == "true"
 
+# EasyOCR Reader 캐싱 (Worker 프로세스 수준 싱글턴)
+_ocr_reader = None
+
+
+def get_ocr_reader():
+    """EasyOCR Reader를 캐싱하여 모델 재로딩 방지 (prefork Worker당 1회)"""
+    global _ocr_reader
+    if _ocr_reader is None:
+        import easyocr
+
+        _ocr_reader = easyocr.Reader(["ko", "en"], gpu=False)
+        logger.info("EasyOCR Reader initialized")
+    return _ocr_reader
+
 
 def mock_ocr_result():
     """테스트용 가짜 OCR 결과 생성"""
@@ -64,20 +78,13 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
             plate_number, confidence = mock_ocr_result()
         else:
             # 실제 OCR 처리
-            import easyocr
-            from google.cloud import storage
+            from core.gcs.client import download_image
 
             # 2. GCS에서 이미지 다운로드
-            storage_client = storage.Client()
-            bucket_name = gcs_uri.split("/")[2]
-            blob_path = "/".join(gcs_uri.split("/")[3:])
+            image_bytes = download_image(gcs_uri)
 
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_path)
-            image_bytes = blob.download_as_bytes()
-
-            # 3. EasyOCR 실행
-            reader = easyocr.Reader(["ko", "en"], gpu=False)
+            # 3. EasyOCR 실행 (캐싱된 Reader 사용)
+            reader = get_ocr_reader()
             results = reader.readtext(image_bytes)
 
             # 4. 번호판 파싱 (신뢰도 가장 높은 결과)
@@ -96,13 +103,14 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
         detection.status = "completed"
         detection.processed_at = timezone.now()
         detection.save(
+            using="detections_db",
             update_fields=[
                 "ocr_result",
                 "ocr_confidence",
                 "status",
                 "processed_at",
                 "updated_at",
-            ]
+            ],
         )
 
         # 6. Vehicle 매칭 (MSA: vehicles_db에서 조회)
@@ -115,7 +123,10 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
                 )
                 if vehicle:
                     detection.vehicle_id = vehicle.id
-                    detection.save(update_fields=["vehicle_id", "updated_at"])
+                    detection.save(
+                        using="detections_db",
+                        update_fields=["vehicle_id", "updated_at"],
+                    )
 
                     # 7. FCM 토큰이 있으면 알림 Task 발행
                     if vehicle.fcm_token:
@@ -133,9 +144,22 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
         }
 
     except Exception as exc:
-        # 실패 시 에러 기록 (detections_db)
-        Detection.objects.using("detections_db").filter(id=detection_id).update(
-            status="failed", error_message=str(exc), updated_at=timezone.now()
-        )
-        logger.error(f"OCR failed for detection {detection_id}: {exc}")
-        raise self.retry(exc=exc)
+        is_final_retry = self.request.retries >= self.max_retries
+        if is_final_retry:
+            # 최종 실패: status=failed 기록
+            Detection.objects.using("detections_db").filter(id=detection_id).update(
+                status="failed", error_message=str(exc), updated_at=timezone.now()
+            )
+            logger.error(f"OCR permanently failed for detection {detection_id}: {exc}")
+            raise
+        else:
+            # 재시도 가능: processing 유지, 에러만 기록
+            Detection.objects.using("detections_db").filter(id=detection_id).update(
+                error_message=f"Retry {self.request.retries}: {exc}",
+                updated_at=timezone.now(),
+            )
+            logger.warning(
+                f"OCR retry {self.request.retries}/{self.max_retries} "
+                f"for detection {detection_id}: {exc}"
+            )
+            raise self.retry(exc=exc)

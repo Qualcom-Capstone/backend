@@ -11,7 +11,6 @@ class NotificationSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "detection_id",
-            "fcm_token",
             "title",
             "body",
             "sent_at",
@@ -29,11 +28,3 @@ class NotificationListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notification
         fields = ["id", "detection_id", "title", "status", "sent_at", "retry_count"]
-
-
-class NotificationCreateSerializer(serializers.ModelSerializer):
-    """알림 생성용 Serializer"""
-
-    class Meta:
-        model = Notification
-        fields = ["detection_id", "fcm_token", "title", "body"]
