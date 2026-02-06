@@ -31,9 +31,7 @@ def process_dlq_message(self, *args, **kwargs):
         try:
             from apps.detections.models import Detection
 
-            Detection.objects.using("detections_db").filter(
-                id=detection_id
-            ).update(
+            Detection.objects.using("detections_db").filter(id=detection_id).update(
                 status="failed",
                 error_message=f"DLQ: {death_reason} from {original_queue}",
                 updated_at=timezone.now(),

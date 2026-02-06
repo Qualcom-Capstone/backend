@@ -106,7 +106,9 @@ class MQTTSubscriber:
         if isinstance(value, str):
             parsed = parse_datetime(value)
             if parsed is None:
-                logger.warning(f"Invalid detected_at format: {value}, using current time")
+                logger.warning(
+                    f"Invalid detected_at format: {value}, using current time"
+                )
                 return timezone.now()
             if timezone.is_naive(parsed):
                 parsed = timezone.make_aware(parsed)
