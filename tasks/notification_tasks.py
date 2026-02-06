@@ -66,22 +66,13 @@ def send_notification(self, detection_id: int):
             time.sleep(random.uniform(0.05, 0.1))
             response = f"mock-message-id-{detection_id}"
         else:
-            # 실제 FCM 전송
-            import firebase_admin
-            from firebase_admin import credentials, messaging
+            # 실제 FCM 전송 (core/firebase/fcm.py 사용)
+            from core.firebase.fcm import send_push_notification
 
-            # Firebase 초기화 (최초 1회)
-            if not firebase_admin._apps:
-                cred_path = os.getenv("FIREBASE_CREDENTIALS")
-                if cred_path:
-                    cred = credentials.Certificate(cred_path)
-                    firebase_admin.initialize_app(cred)
-                else:
-                    # GOOGLE_APPLICATION_CREDENTIALS 사용
-                    firebase_admin.initialize_app()
-
-            message = messaging.Message(
-                notification=messaging.Notification(title=title, body=body),
+            response = send_push_notification(
+                token=vehicle.fcm_token,
+                title=title,
+                body=body,
                 data={
                     "detection_id": str(detection_id),
                     "plate_number": detection.ocr_result or "",
@@ -90,11 +81,7 @@ def send_notification(self, detection_id: int):
                     "location": detection.location or "",
                     "detected_at": detection.detected_at.isoformat(),
                 },
-                token=vehicle.fcm_token,
             )
-
-            # 4. FCM API 호출
-            response = messaging.send(message)
 
         # 5. 성공 이력 저장 (notifications_db)
         Notification.objects.using("notifications_db").create(

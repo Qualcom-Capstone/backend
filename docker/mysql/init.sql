@@ -18,7 +18,6 @@ GRANT ALL PRIVILEGES ON speedcam.* TO 'sa'@'%';
 GRANT ALL PRIVILEGES ON speedcam_vehicles.* TO 'sa'@'%';
 GRANT ALL PRIVILEGES ON speedcam_detections.* TO 'sa'@'%';
 GRANT ALL PRIVILEGES ON speedcam_notifications.* TO 'sa'@'%';
-GRANT ALL PRIVILEGES ON *.* TO 'sa'@'%' WITH GRANT OPTION;
 
 FLUSH PRIVILEGES;
 
