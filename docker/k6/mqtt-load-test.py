@@ -53,14 +53,16 @@ def generate_message():
     speed_limit = random.choice([60.0, 80.0, 100.0, 110.0])
     detected_speed = speed_limit + random.uniform(5, 50)
 
-    return json.dumps({
-        "camera_id": random.choice(CAMERA_IDS),
-        "location": random.choice(LOCATIONS),
-        "detected_speed": round(detected_speed, 1),
-        "speed_limit": speed_limit,
-        "detected_at": datetime.now(kst).isoformat(),
-        "image_gcs_uri": f"gs://speedcam-bucket/detections/{int(time.time() * 1000)}-{random.randint(1000, 9999)}.jpg",
-    })
+    return json.dumps(
+        {
+            "camera_id": random.choice(CAMERA_IDS),
+            "location": random.choice(LOCATIONS),
+            "detected_speed": round(detected_speed, 1),
+            "speed_limit": speed_limit,
+            "detected_at": datetime.now(kst).isoformat(),
+            "image_gcs_uri": f"gs://speedcam-bucket/detections/{int(time.time() * 1000)}-{random.randint(1000, 9999)}.jpg",
+        }
+    )
 
 
 def publish_worker(worker_id, rate_per_sec, duration_sec):
@@ -128,7 +130,9 @@ def run_load_test(workers, rate_per_worker, duration):
     print("\n MQTT Load Test Starting")
     print(f"  Host: {MQTT_HOST}:{MQTT_PORT}")
     print(f"  Workers: {workers}")
-    print(f"  Rate: {rate_per_worker}/s per worker ({workers * rate_per_worker}/s total)")
+    print(
+        f"  Rate: {rate_per_worker}/s per worker ({workers * rate_per_worker}/s total)"
+    )
     print(f"  Duration: {duration}s")
     print(f"  Topic: {TOPIC}")
     print()
@@ -159,9 +163,15 @@ def run_load_test(workers, rate_per_worker, duration):
 
 def main():
     parser = argparse.ArgumentParser(description="MQTT Load Test")
-    parser.add_argument("--workers", type=int, default=5, help="Number of concurrent workers")
-    parser.add_argument("--rate", type=int, default=2, help="Messages per second per worker")
-    parser.add_argument("--duration", type=int, default=60, help="Test duration in seconds")
+    parser.add_argument(
+        "--workers", type=int, default=5, help="Number of concurrent workers"
+    )
+    parser.add_argument(
+        "--rate", type=int, default=2, help="Messages per second per worker"
+    )
+    parser.add_argument(
+        "--duration", type=int, default=60, help="Test duration in seconds"
+    )
     args = parser.parse_args()
 
     run_load_test(args.workers, args.rate, args.duration)
