@@ -12,34 +12,13 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.dev")
 
 app = Celery("speedcam")
 
+# Django settings에서 CELERY_ prefix 설정을 자동으로 읽어옴
+app.config_from_object("django.conf:settings", namespace="CELERY")
+
 # Exchange 정의
 ocr_exchange = Exchange("ocr_exchange", type="direct", durable=True)
 fcm_exchange = Exchange("fcm_exchange", type="direct", durable=True)
 dlq_exchange = Exchange("dlq_exchange", type="fanout", durable=True)
-
-
-# Celery 설정
-app.conf.update(
-    # 브로커 설정
-    broker_url=os.getenv("CELERY_BROKER_URL", "amqp://sa:1234@rabbitmq:5672//"),
-    result_backend="rpc://",
-    # 직렬화
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    # 시간대
-    timezone="Asia/Seoul",
-    enable_utc=True,
-    # 안정성
-    task_acks_late=True,
-    task_reject_on_worker_lost=True,
-    broker_connection_retry_on_startup=True,
-    # Timeout
-    task_time_limit=300,
-    task_soft_time_limit=240,
-    # Prefetch
-    worker_prefetch_multiplier=1,
-)
 
 # Queue 정의
 app.conf.task_queues = (
