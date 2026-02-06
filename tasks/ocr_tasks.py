@@ -65,16 +65,10 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
         else:
             # 실제 OCR 처리
             import easyocr
-            from google.cloud import storage
+            from core.gcs.client import download_image
 
             # 2. GCS에서 이미지 다운로드
-            storage_client = storage.Client()
-            bucket_name = gcs_uri.split("/")[2]
-            blob_path = "/".join(gcs_uri.split("/")[3:])
-
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_path)
-            image_bytes = blob.download_as_bytes()
+            image_bytes = download_image(gcs_uri)
 
             # 3. EasyOCR 실행
             reader = easyocr.Reader(["ko", "en"], gpu=False)
@@ -96,13 +90,14 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
         detection.status = "completed"
         detection.processed_at = timezone.now()
         detection.save(
+            using="detections_db",
             update_fields=[
                 "ocr_result",
                 "ocr_confidence",
                 "status",
                 "processed_at",
                 "updated_at",
-            ]
+            ],
         )
 
         # 6. Vehicle 매칭 (MSA: vehicles_db에서 조회)
@@ -115,7 +110,10 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
                 )
                 if vehicle:
                     detection.vehicle_id = vehicle.id
-                    detection.save(update_fields=["vehicle_id", "updated_at"])
+                    detection.save(
+                        using="detections_db",
+                        update_fields=["vehicle_id", "updated_at"],
+                    )
 
                     # 7. FCM 토큰이 있으면 알림 Task 발행
                     if vehicle.fcm_token:
