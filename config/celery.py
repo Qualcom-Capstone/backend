@@ -62,6 +62,11 @@ app.conf.task_routes = {
         "exchange": "fcm_exchange",
         "routing_key": "fcm",
     },
+    "tasks.dlq_tasks.process_dlq_message": {
+        "queue": "dlq_queue",
+        "exchange": "dlq_exchange",
+        "routing_key": "",
+    },
 }
 
 # Task 자동 발견

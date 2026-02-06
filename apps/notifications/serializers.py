@@ -11,7 +11,6 @@ class NotificationSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "detection_id",
-            "fcm_token",
             "title",
             "body",
             "sent_at",

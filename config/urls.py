@@ -28,8 +28,37 @@ def home(request):
 
 
 def health(request):
-    """헬스체크 엔드포인트"""
-    return JsonResponse({"status": "healthy"})
+    """헬스체크 엔드포인트 (외부 의존성 검증 포함)"""
+    checks = {}
+
+    # DB 연결 확인
+    from django.db import connections
+
+    for db_name in connections:
+        try:
+            connections[db_name].ensure_connection()
+            checks[db_name] = "ok"
+        except Exception as e:
+            checks[db_name] = f"error: {e}"
+
+    # RabbitMQ 연결 확인
+    try:
+        from config.celery import app as celery_app
+
+        conn = celery_app.connection()
+        conn.ensure_connection(max_retries=1, timeout=3)
+        conn.close()
+        checks["rabbitmq"] = "ok"
+    except Exception as e:
+        checks["rabbitmq"] = f"error: {e}"
+
+    is_healthy = all(v == "ok" for v in checks.values())
+    status_code = 200 if is_healthy else 503
+
+    return JsonResponse(
+        {"status": "healthy" if is_healthy else "unhealthy", "checks": checks},
+        status=status_code,
+    )
 
 
 schema_view = get_schema_view(

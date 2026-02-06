@@ -22,18 +22,12 @@ class VehicleViewSet(viewsets.ModelViewSet):
         return VehicleSerializer
 
     def perform_create(self, serializer):
-        """생성 시 vehicles_db에 저장"""
-        instance = Vehicle.objects.using("vehicles_db").create(
-            **serializer.validated_data
-        )
-        serializer.instance = instance
+        """생성 시 vehicles_db에 저장 (Router가 자동 라우팅)"""
+        serializer.save()
 
     def perform_update(self, serializer):
-        """업데이트 시 vehicles_db 사용"""
-        instance = serializer.instance
-        for attr, value in serializer.validated_data.items():
-            setattr(instance, attr, value)
-        instance.save(using="vehicles_db")
+        """업데이트 시 vehicles_db 사용 (Router가 자동 라우팅)"""
+        serializer.save()
 
     @action(detail=True, methods=["patch"], url_path="fcm-token")
     def update_fcm_token(self, request, pk=None):
