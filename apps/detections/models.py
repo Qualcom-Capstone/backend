@@ -18,7 +18,7 @@ class Detection(models.Model):
 
     # MSA: FK 대신 ID로 참조 (Vehicles Service)
     vehicle_id = models.BigIntegerField(
-        null=True, blank=True, db_index=True, verbose_name="차량 ID"
+        null=True, blank=True, verbose_name="차량 ID"
     )
     detected_speed = models.FloatField(verbose_name="감지 속도")
     speed_limit = models.FloatField(default=60.0, verbose_name="제한 속도")

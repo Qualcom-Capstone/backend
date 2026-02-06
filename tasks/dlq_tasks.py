@@ -34,6 +34,7 @@ def process_dlq_message(self, *args, **kwargs):
             Detection.objects.using("detections_db").filter(id=detection_id).update(
                 status="failed",
                 error_message=f"DLQ: {death_reason} from {original_queue}",
+                # QuerySet.update() bypasses auto_now, so set explicitly
                 updated_at=timezone.now(),
             )
             logger.info(f"Detection {detection_id} marked as failed via DLQ")

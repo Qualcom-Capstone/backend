@@ -16,7 +16,7 @@ class Notification(models.Model):
     ]
 
     # MSA: FK 대신 ID로 참조 (Detections Service)
-    detection_id = models.BigIntegerField(db_index=True, verbose_name="감지 내역 ID")
+    detection_id = models.BigIntegerField(verbose_name="감지 내역 ID")
     fcm_token = models.CharField(
         max_length=255, blank=True, null=True, verbose_name="FCM 토큰"
     )
