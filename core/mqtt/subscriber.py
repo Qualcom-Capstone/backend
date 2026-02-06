@@ -6,6 +6,7 @@ import os
 
 import paho.mqtt.client as mqtt
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class MQTTSubscriber:
                 location=payload.get("location"),
                 detected_speed=payload["detected_speed"],
                 speed_limit=payload.get("speed_limit", 60.0),
-                detected_at=payload.get("detected_at", timezone.now()),
+                detected_at=self._parse_detected_at(payload.get("detected_at")),
                 image_gcs_uri=payload["image_gcs_uri"],
                 status="pending",
             )
@@ -96,6 +97,21 @@ class MQTTSubscriber:
             logger.error(f"Missing required field in MQTT message: {e}")
         except Exception as e:
             logger.error(f"Error processing MQTT message: {e}")
+
+    @staticmethod
+    def _parse_detected_at(value):
+        """detected_at 문자열을 datetime으로 파싱"""
+        if value is None:
+            return timezone.now()
+        if isinstance(value, str):
+            parsed = parse_datetime(value)
+            if parsed is None:
+                logger.warning(f"Invalid detected_at format: {value}, using current time")
+                return timezone.now()
+            if timezone.is_naive(parsed):
+                parsed = timezone.make_aware(parsed)
+            return parsed
+        return value
 
     def start(self):
         """MQTT Subscriber 시작 (blocking)"""
