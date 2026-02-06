@@ -23,7 +23,8 @@ FCM_MOCK = os.getenv("FCM_MOCK", "false").lower() == "true"
 def send_notification(self, detection_id: int):
     """
     FCM 푸시 알림 전송 Task
-    - Exponential Backoff 재시도
+    - 대시보드 토픽 브로드캐스트 (모든 감지에 대해)
+    - 매칭된 차량 개별 푸시 (차량 있는 경우)
     - MSA: 각 서비스별 DB에서 조회
     """
     from apps.detections.models import Detection
@@ -36,7 +37,55 @@ def send_notification(self, detection_id: int):
             id=detection_id, status="completed"
         )
 
-        # 2. Vehicle 조회 (vehicles_db) - MSA: 별도 DB
+        # 2. 알림 메시지 생성
+        title = f"⚠️ 과속 위반 감지: {detection.ocr_result}"
+        body = (
+            f"📍 위치: {detection.location}\n"
+            f"🚗 속도: {detection.detected_speed}km/h "
+            f"(제한: {detection.speed_limit}km/h)"
+        )
+        data = {
+            "detection_id": str(detection_id),
+            "plate_number": detection.ocr_result or "",
+            "speed": str(detection.detected_speed),
+            "speed_limit": str(detection.speed_limit),
+            "location": detection.location or "",
+            "detected_at": detection.detected_at.isoformat(),
+        }
+
+        # 3. 대시보드 토픽으로 항상 전송
+        topic_response = None
+        try:
+            if FCM_MOCK:
+                topic_response = f"mock-topic-{detection_id}"
+            else:
+                from core.firebase.fcm import send_topic_notification
+
+                topic_response = send_topic_notification(
+                    "dashboard_alerts", title, body, data
+                )
+            logger.info(
+                f"Dashboard topic notification sent for detection "
+                f"{detection_id}: {topic_response}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Dashboard topic notification failed for detection "
+                f"{detection_id}: {e}"
+            )
+
+        # 4. 토픽 알림 이력 저장 (notifications_db)
+        Notification.objects.using("notifications_db").create(
+            detection_id=detection_id,
+            fcm_token="topic:dashboard_alerts",
+            title=title,
+            body=body,
+            status="sent" if topic_response else "failed",
+            sent_at=timezone.now() if topic_response else None,
+            error_message=None if topic_response else "Topic send failed",
+        )
+
+        # 5. 매칭된 차량에 개별 푸시 (기존 동작)
         vehicle = None
         if detection.vehicle_id:
             try:
@@ -46,63 +95,60 @@ def send_notification(self, detection_id: int):
             except Vehicle.DoesNotExist:
                 logger.warning(f"Vehicle {detection.vehicle_id} not found")
 
-        if not vehicle or not vehicle.fcm_token:
-            logger.warning(f"No FCM token for detection {detection_id}")
-            return {"status": "skipped", "reason": "No FCM token"}
+        if vehicle and vehicle.fcm_token:
+            try:
+                if FCM_MOCK:
+                    vehicle_response = f"mock-message-id-{detection_id}"
+                else:
+                    from core.firebase.fcm import send_push_notification
 
-        # 3. FCM 메시지 생성
-        title = f"⚠️ 과속 위반 감지: {detection.ocr_result}"
-        body = (
-            f"📍 위치: {detection.location}\n"
-            f"🚗 속도: {detection.detected_speed}km/h "
-            f"(제한: {detection.speed_limit}km/h)"
-        )
+                    vehicle_response = send_push_notification(
+                        token=vehicle.fcm_token,
+                        title=title,
+                        body=body,
+                        data=data,
+                    )
 
-        if FCM_MOCK:
-            # Mock 모드
-            import random
-            import time
+                Notification.objects.using("notifications_db").create(
+                    detection_id=detection_id,
+                    fcm_token=vehicle.fcm_token,
+                    title=title,
+                    body=body,
+                    status="sent",
+                    sent_at=timezone.now(),
+                )
+                logger.info(
+                    f"Vehicle notification sent for detection "
+                    f"{detection_id}: {vehicle_response}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Vehicle notification failed for detection "
+                    f"{detection_id}: {e}"
+                )
+                Notification.objects.using("notifications_db").create(
+                    detection_id=detection_id,
+                    fcm_token=vehicle.fcm_token,
+                    title=title,
+                    body=body,
+                    status="failed",
+                    error_message=str(e),
+                )
 
-            time.sleep(random.uniform(0.05, 0.1))
-            response = f"mock-message-id-{detection_id}"
-        else:
-            # 실제 FCM 전송 (core/firebase/fcm.py 사용)
-            from core.firebase.fcm import send_push_notification
-
-            response = send_push_notification(
-                token=vehicle.fcm_token,
-                title=title,
-                body=body,
-                data={
-                    "detection_id": str(detection_id),
-                    "plate_number": detection.ocr_result or "",
-                    "speed": str(detection.detected_speed),
-                    "speed_limit": str(detection.speed_limit),
-                    "location": detection.location or "",
-                    "detected_at": detection.detected_at.isoformat(),
-                },
-            )
-
-        # 5. 성공 이력 저장 (notifications_db)
-        Notification.objects.using("notifications_db").create(
-            detection_id=detection_id,
-            fcm_token=vehicle.fcm_token,
-            title=title,
-            body=body,
-            status="sent",
-            sent_at=timezone.now(),
-        )
-
-        logger.info(f"Notification sent for detection {detection_id}: {response}")
-        return {"status": "sent", "fcm_response": response}
+        return {
+            "status": "sent",
+            "topic": bool(topic_response),
+            "vehicle": bool(vehicle and vehicle.fcm_token),
+        }
 
     except Detection.DoesNotExist:
-        logger.error(f"Detection {detection_id} not found")
+        logger.error(f"Detection {detection_id} not found or not completed")
         return {"status": "error", "reason": "Detection not found"}
 
     except Exception as exc:
-        # FCM 실패 시 이력 저장 후 재시도
         try:
+            from apps.notifications.models import Notification
+
             Notification.objects.using("notifications_db").create(
                 detection_id=detection_id,
                 status="failed",
