@@ -1,6 +1,5 @@
 """DLQ (Dead Letter Queue) Consumer Task"""
 
-import json
 import logging
 
 from celery import shared_task
