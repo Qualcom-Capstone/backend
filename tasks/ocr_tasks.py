@@ -132,7 +132,10 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
 
         # 7. Always send notification for completed detections
         #    (dashboard gets topic notification; matched vehicle gets individual push)
-        send_notification.apply_async(args=[detection_id], queue="fcm_queue")
+        try:
+            send_notification.apply_async(args=[detection_id], queue="fcm_queue")
+        except Exception as e:
+            logger.warning(f"Failed to enqueue notification for detection {detection_id}: {e}")
 
         logger.info(f"OCR completed for detection {detection_id}: {plate_number}")
         return {

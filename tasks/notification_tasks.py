@@ -38,9 +38,9 @@ def send_notification(self, detection_id: int):
         )
 
         # 2. 알림 메시지 생성
-        title = f"⚠️ 과속 위반 감지: {detection.ocr_result}"
+        title = f"⚠️ 과속 위반 감지: {detection.ocr_result or '미확인'}"
         body = (
-            f"📍 위치: {detection.location}\n"
+            f"📍 위치: {detection.location or '알 수 없음'}\n"
             f"🚗 속도: {detection.detected_speed}km/h "
             f"(제한: {detection.speed_limit}km/h)"
         )
@@ -53,37 +53,48 @@ def send_notification(self, detection_id: int):
             "detected_at": detection.detected_at.isoformat(),
         }
 
-        # 3. 대시보드 토픽으로 항상 전송
+        # 3. 대시보드 토픽으로 항상 전송 (중복 방지)
         topic_response = None
-        try:
-            if FCM_MOCK:
-                topic_response = f"mock-topic-{detection_id}"
-            else:
-                from core.firebase.fcm import send_topic_notification
+        already_sent_topic = Notification.objects.using("notifications_db").filter(
+            detection_id=detection_id, fcm_token="topic:dashboard_alerts", status="sent"
+        ).exists()
 
-                topic_response = send_topic_notification(
-                    "dashboard_alerts", title, body, data
+        if not already_sent_topic:
+            try:
+                if FCM_MOCK:
+                    topic_response = f"mock-topic-{detection_id}"
+                else:
+                    from core.firebase.fcm import send_topic_notification
+
+                    topic_response = send_topic_notification(
+                        "dashboard_alerts", title, body, data
+                    )
+                logger.info(
+                    f"Dashboard topic notification sent for detection "
+                    f"{detection_id}: {topic_response}"
                 )
-            logger.info(
-                f"Dashboard topic notification sent for detection "
-                f"{detection_id}: {topic_response}"
-            )
-        except Exception as e:
-            logger.warning(
-                f"Dashboard topic notification failed for detection "
-                f"{detection_id}: {e}"
-            )
+            except Exception as e:
+                logger.warning(
+                    f"Dashboard topic notification failed for detection "
+                    f"{detection_id}: {e}"
+                )
 
-        # 4. 토픽 알림 이력 저장 (notifications_db)
-        Notification.objects.using("notifications_db").create(
-            detection_id=detection_id,
-            fcm_token="topic:dashboard_alerts",
-            title=title,
-            body=body,
-            status="sent" if topic_response else "failed",
-            sent_at=timezone.now() if topic_response else None,
-            error_message=None if topic_response else "Topic send failed",
-        )
+            # 4. 토픽 알림 이력 저장 (notifications_db)
+            Notification.objects.using("notifications_db").create(
+                detection_id=detection_id,
+                fcm_token="topic:dashboard_alerts",
+                title=title,
+                body=body,
+                status="sent" if topic_response else "failed",
+                sent_at=timezone.now() if topic_response else None,
+                error_message=None if topic_response else "Topic send failed",
+            )
+        else:
+            topic_response = "already_sent"
+            logger.info(
+                f"Dashboard topic notification already sent for detection "
+                f"{detection_id}, skipping"
+            )
 
         # 5. 매칭된 차량에 개별 푸시 (기존 동작)
         vehicle = None
@@ -142,8 +153,8 @@ def send_notification(self, detection_id: int):
         }
 
     except Detection.DoesNotExist:
-        logger.error(f"Detection {detection_id} not found or not completed")
-        return {"status": "error", "reason": "Detection not found"}
+        logger.warning(f"Detection {detection_id} not found or not completed, retrying")
+        raise self.retry(countdown=3, max_retries=3)
 
     except Exception as exc:
         try:
@@ -155,8 +166,8 @@ def send_notification(self, detection_id: int):
                 retry_count=self.request.retries,
                 error_message=str(exc),
             )
-        except Exception:
-            pass
+        except Exception as db_err:
+            logger.error(f"Failed to record notification failure for detection {detection_id}: {db_err}")
 
         logger.error(f"Notification failed for detection {detection_id}: {exc}")
         raise
