@@ -67,8 +67,8 @@ class MQTTSubscriber:
             from apps.detections.models import Detection
             from tasks.ocr_tasks import process_ocr
 
-            # 1. Detection 레코드 생성 (status=pending)
-            detection = Detection.objects.create(
+            # 1. Detection 레코드 생성 (status=pending, detections_db)
+            detection = Detection.objects.using("detections_db").create(
                 camera_id=payload.get("camera_id"),
                 location=payload.get("location"),
                 detected_speed=payload["detected_speed"],

@@ -47,21 +47,6 @@ class DetectionListSerializer(serializers.ModelSerializer):
         ]
 
 
-class DetectionCreateSerializer(serializers.ModelSerializer):
-    """MQTT 메시지로부터 생성용"""
-
-    class Meta:
-        model = Detection
-        fields = [
-            "detected_speed",
-            "speed_limit",
-            "location",
-            "camera_id",
-            "image_gcs_uri",
-            "detected_at",
-        ]
-
-
 class DetectionStatisticsSerializer(serializers.Serializer):
     """통계 데이터 Serializer"""
 
