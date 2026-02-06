@@ -108,6 +108,36 @@ class FCMClient:
         )
         return result
 
+    def subscribe_to_topic(self, tokens: List[str], topic: str) -> Dict:
+        """토큰을 FCM 토픽에 구독"""
+        from firebase_admin import messaging
+
+        response = messaging.subscribe_to_topic(tokens, topic)
+        logger.info(
+            f"FCM topic subscribe '{topic}': {response.success_count} success, "
+            f"{response.failure_count} failed"
+        )
+        return {
+            "success_count": response.success_count,
+            "failure_count": response.failure_count,
+        }
+
+    def send_to_topic(
+        self, topic: str, title: str, body: str, data: Optional[Dict[str, str]] = None
+    ) -> str:
+        """토픽으로 알림 전송"""
+        from firebase_admin import messaging
+
+        message = messaging.Message(
+            notification=messaging.Notification(title=title, body=body),
+            data=data or {},
+            topic=topic,
+        )
+
+        response = messaging.send(message)
+        logger.info(f"FCM sent to topic '{topic}': {response}")
+        return response
+
 
 # 편의 함수
 _fcm_client = None
@@ -125,3 +155,15 @@ def send_push_notification(
 ) -> str:
     """푸시 알림 전송 (편의 함수)"""
     return get_fcm_client().send_to_token(token, title, body, data)
+
+
+def subscribe_tokens_to_topic(tokens: List[str], topic: str) -> Dict:
+    """토픽 구독 (편의 함수)"""
+    return get_fcm_client().subscribe_to_topic(tokens, topic)
+
+
+def send_topic_notification(
+    topic: str, title: str, body: str, data: Optional[Dict[str, str]] = None
+) -> str:
+    """토픽 알림 전송 (편의 함수)"""
+    return get_fcm_client().send_to_topic(topic, title, body, data)
