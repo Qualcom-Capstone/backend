@@ -112,6 +112,7 @@ services:
       - "--config.my-cnf=/cfg/.my.cnf"
     ports:
       - "9104:9104"
+    restart: unless-stopped
     networks:
       - speedcam-network
 
@@ -125,8 +126,7 @@ services:
       CE_BROKER_URL: "amqp://sa:1234@rabbitmq:5672//"
     ports:
       - "9808:9808"
-    depends_on:
-      - prometheus
+    restart: unless-stopped
     networks:
       - speedcam-network
 
@@ -136,6 +136,8 @@ services:
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: speedcam-cadvisor
+    profiles:
+      - linux
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -160,9 +162,6 @@ services:
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
       K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "true"
       MAIN_SERVICE_URL: http://main:8000
-      MQTT_BROKER: tcp://rabbitmq:1883
-      MQTT_USER: sa
-      MQTT_PASS: "1234"
     networks:
       - speedcam-network
 
