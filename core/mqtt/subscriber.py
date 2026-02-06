@@ -117,7 +117,21 @@ class MQTTSubscriber:
         logger.info("MQTT Subscriber stopped")
 
 
-def start_mqtt_subscriber():
-    """편의 함수: MQTT Subscriber 시작"""
+def start_mqtt_subscriber(blocking=True):
+    """
+    MQTT Subscriber 시작
+
+    Args:
+        blocking: True면 현재 스레드에서 블로킹 실행,
+                  False면 daemon 스레드에서 백그라운드 실행
+    """
     subscriber = MQTTSubscriber()
-    subscriber.start()
+    if blocking:
+        subscriber.start()
+    else:
+        import threading
+
+        thread = threading.Thread(target=subscriber.start, daemon=True)
+        thread.start()
+        logger.info("MQTT Subscriber started in background thread")
+    return subscriber
