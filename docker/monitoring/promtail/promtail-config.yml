@@ -26,6 +26,6 @@ scrape_configs:
         target_label: "service"
     pipeline_stages:
       - regex:
-          expression: ".*trace_id=(?P<trace_id>[a-f0-9]+).*"
+          expression: ".*trace_id=(?P<trace_id>[a-fA-F0-9]+).*"
       - labels:
           trace_id:

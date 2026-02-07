@@ -26,7 +26,6 @@
 | Google Cloud SDK | 최신 | https://cloud.google.com/sdk/docs/install |
 | Docker | 20.10+ | https://docs.docker.com/get-docker/ |
 | Docker Compose | 2.0+ | Docker Desktop 포함 또는 별도 설치 |
-| Make | 3.81+ | 기본 설치됨 (macOS/Linux) |
 
 ### 1.2 GCP 프로젝트 설정
 
@@ -814,7 +813,7 @@ CORS_ALLOWED_ORIGINS=https://your-frontend-domain.com
 OTEL_EXPORTER_OTLP_ENDPOINT=http://${MON_HOST}:4317
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 OTEL_RESOURCE_ATTRIBUTES=service.namespace=speedcam,deployment.environment=prod
-OTEL_TRACES_SAMPLER=parentbased_tracealways
+OTEL_TRACES_SAMPLER=parentbased_always_on
 OTEL_PYTHON_LOG_CORRELATION=true
 ```
 
