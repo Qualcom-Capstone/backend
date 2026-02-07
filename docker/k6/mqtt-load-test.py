@@ -60,7 +60,10 @@ def generate_message():
             "detected_speed": round(detected_speed, 1),
             "speed_limit": speed_limit,
             "detected_at": datetime.now(kst).isoformat(),
-            "image_gcs_uri": f"gs://speedcam-bucket/detections/{int(time.time() * 1000)}-{random.randint(1000, 9999)}.jpg",
+            "image_gcs_uri": (
+                f"gs://speedcam-bucket/detections/"
+                f"{int(time.time() * 1000)}-{random.randint(1000, 9999)}.jpg"
+            ),
         }
     )
 
