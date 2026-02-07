@@ -55,9 +55,15 @@ def send_notification(self, detection_id: int):
 
         # 3. 대시보드 토픽으로 항상 전송 (중복 방지)
         topic_response = None
-        already_sent_topic = Notification.objects.using("notifications_db").filter(
-            detection_id=detection_id, fcm_token="topic:dashboard_alerts", status="sent"
-        ).exists()
+        already_sent_topic = (
+            Notification.objects.using("notifications_db")
+            .filter(
+                detection_id=detection_id,
+                fcm_token="topic:dashboard_alerts",
+                status="sent",
+            )
+            .exists()
+        )
 
         if not already_sent_topic:
             try:
@@ -134,8 +140,7 @@ def send_notification(self, detection_id: int):
                 )
             except Exception as e:
                 logger.warning(
-                    f"Vehicle notification failed for detection "
-                    f"{detection_id}: {e}"
+                    f"Vehicle notification failed for detection " f"{detection_id}: {e}"
                 )
                 Notification.objects.using("notifications_db").create(
                     detection_id=detection_id,
@@ -167,7 +172,9 @@ def send_notification(self, detection_id: int):
                 error_message=str(exc),
             )
         except Exception as db_err:
-            logger.error(f"Failed to record notification failure for detection {detection_id}: {db_err}")
+            logger.error(
+                f"Failed to record notification failure for detection {detection_id}: {db_err}"
+            )
 
         logger.error(f"Notification failed for detection {detection_id}: {exc}")
         raise

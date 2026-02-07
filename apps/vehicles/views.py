@@ -68,7 +68,9 @@ class VehicleViewSet(viewsets.ModelViewSet):
             try:
                 FCM_MOCK = os.getenv("FCM_MOCK", "false").lower() == "true"
                 if FCM_MOCK:
-                    logger.info("[MOCK] Would subscribe token to dashboard_alerts topic")
+                    logger.info(
+                        "[MOCK] Would subscribe token to dashboard_alerts topic"
+                    )
                 else:
                     from core.firebase.fcm import get_fcm_client
 
