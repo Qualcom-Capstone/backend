@@ -127,14 +127,17 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
                         using="detections_db",
                         update_fields=["vehicle_id", "updated_at"],
                     )
-
-                    # 7. FCM 토큰이 있으면 알림 Task 발행
-                    if vehicle.fcm_token:
-                        send_notification.apply_async(
-                            args=[detection_id], queue="fcm_queue"
-                        )
             except Exception as e:
                 logger.warning(f"Vehicle lookup failed: {e}")
+
+        # 7. Always send notification for completed detections
+        #    (dashboard gets topic notification; matched vehicle gets individual push)
+        try:
+            send_notification.apply_async(args=[detection_id], queue="fcm_queue")
+        except Exception as e:
+            logger.warning(
+                f"Failed to enqueue notification for detection {detection_id}: {e}"
+            )
 
         logger.info(f"OCR completed for detection {detection_id}: {plate_number}")
         return {

@@ -28,7 +28,6 @@ class Vehicle(models.Model):
         verbose_name = "차량"
         verbose_name_plural = "차량 목록"
         indexes = [
-            models.Index(fields=["plate_number"]),
             models.Index(fields=["fcm_token"]),
         ]
 

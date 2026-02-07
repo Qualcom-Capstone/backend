@@ -37,33 +37,22 @@ class DetectionViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"])
     def statistics(self, request):
         """위반 통계"""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
         queryset = Detection.objects.using("detections_db").all()
 
         # 기간 필터 (선택)
         period = request.query_params.get("period")
-        if period == "today":
-            from datetime import timedelta
-
-            from django.utils import timezone
-
+        period_map = {
+            "today": timedelta(days=1),
+            "week": timedelta(weeks=1),
+            "month": timedelta(days=30),
+        }
+        if period in period_map:
             queryset = queryset.filter(
-                detected_at__gte=timezone.now() - timedelta(days=1)
-            )
-        elif period == "week":
-            from datetime import timedelta
-
-            from django.utils import timezone
-
-            queryset = queryset.filter(
-                detected_at__gte=timezone.now() - timedelta(weeks=1)
-            )
-        elif period == "month":
-            from datetime import timedelta
-
-            from django.utils import timezone
-
-            queryset = queryset.filter(
-                detected_at__gte=timezone.now() - timedelta(days=30)
+                detected_at__gte=timezone.now() - period_map[period]
             )
 
         # 카메라 필터 (선택)
