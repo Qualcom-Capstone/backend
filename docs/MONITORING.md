@@ -75,7 +75,7 @@ docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
 # k6 서비스는 profiles: [loadtest] 이므로 명시적 실행 필요
 cd docker
 docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
-  run k6 run --out experimental-prometheus-rw /scripts/tests/smoke.js
+  run k6 run --out experimental-prometheus-rw /scripts/load-test.js
 ```
 
 ### 3.4 모니터링만 재시작 (앱 유지)
@@ -196,7 +196,7 @@ opentelemetry-instrument \
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 OTEL_RESOURCE_ATTRIBUTES=service.namespace=speedcam,deployment.environment=dev
-OTEL_TRACES_SAMPLER=parentbased_tracealways
+OTEL_TRACES_SAMPLER=parentbased_always_on
 OTEL_PYTHON_LOG_CORRELATION=true
 ```
 
@@ -313,17 +313,9 @@ rate(container_network_receive_bytes_total{name=~"speedcam-.*"}[5m])
 ```bash
 cd docker
 
-# Smoke Test
+# 부하 테스트 실행 (Prometheus에 결과 기록)
 docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
-  run k6 run --out experimental-prometheus-rw /scripts/tests/smoke.js
-
-# Load Test
-docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
-  run k6 run --out experimental-prometheus-rw /scripts/tests/load.js
-
-# Stress Test
-docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
-  run k6 run --out experimental-prometheus-rw /scripts/tests/stress.js
+  run k6 run --out experimental-prometheus-rw /scripts/load-test.js
 ```
 
 ### 10.2 K6 → Prometheus 메트릭

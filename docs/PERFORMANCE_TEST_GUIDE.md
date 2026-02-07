@@ -259,9 +259,6 @@ Alert Worker (FCM 알림)
 pip install paho-mqtt
 ```
 
-**Docker 컨테이너에서 실행하는 경우**:
-Docker Compose의 `python` 또는 `python:3.x` 이미지에 paho-mqtt가 사전 설치되어 있어야 합니다.
-
 ### 4.3 실행 방법
 
 **기본 실행** (호스트):
@@ -270,14 +267,6 @@ python docker/k6/mqtt-load-test.py \
   --workers 5 \
   --rate 2 \
   --duration 60
-```
-
-**Docker Compose 실행**:
-```bash
-cd docker
-docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
-  run --rm python python /app/k6/mqtt-load-test.py \
-  --workers 5 --rate 2 --duration 60
 ```
 
 **환경 변수 오버라이드**:
@@ -409,7 +398,7 @@ for status, count in sorted(status_counts.items()):
 **정상 상태**:
 - 대부분이 `completed` 상태
 - 일부 `processing` 또는 `pending` (최근 생성된 건)
-- `failed` 건이 있으면 OCR Worker 로그 확인: `docker logs speedcam-ocr-worker`
+- `failed` 건이 있으면 OCR Worker 로그 확인: `docker logs speedcam-ocr`
 
 ```bash
 # 최근 생성된 Detection 확인
@@ -782,7 +771,7 @@ docker compose -f docker-compose.monitoring.yml up -d
 ```bash
 # 개별 서비스 종료
 docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
-  stop speedcam-main speedcam-ocr-worker
+  stop speedcam-main speedcam-ocr
 
 # 개별 서비스 재시작
 docker compose -f docker-compose.yml -f docker-compose.monitoring.yml \
@@ -815,8 +804,8 @@ docker compose -f docker-compose.yml -f docker-compose.monitoring.yml ps
 
 # 로그 실시간 추적
 docker logs -f speedcam-main
-docker logs -f speedcam-ocr-worker
-docker logs -f speedcam-alert-worker
+docker logs -f speedcam-ocr
+docker logs -f speedcam-alert
 
 # 모니터링 데이터 초기화 후 재시작
 rm -rf docker/monitoring/*/data
