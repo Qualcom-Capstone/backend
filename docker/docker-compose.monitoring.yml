@@ -1,0 +1,170 @@
+services:
+  # ===========================================
+  # OpenTelemetry Collector
+  # ===========================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.98.0
+    container_name: speedcam-otel-collector
+    command: ["--config", "/etc/otel-collector-config.yml"]
+    volumes:
+      - ./monitoring/otel-collector/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus exporter
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # Jaeger (Distributed Tracing)
+  # ===========================================
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: speedcam-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14250:14250"  # gRPC (collector)
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # Prometheus (Metrics)
+  # ===========================================
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: speedcam-prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-remote-write-receiver"
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # Grafana (Dashboards)
+  # ===========================================
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: speedcam-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - jaeger
+      - loki
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # Loki (Log Aggregation)
+  # ===========================================
+  loki:
+    image: grafana/loki:2.9.6
+    container_name: speedcam-loki
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - ./monitoring/loki/data:/loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # Promtail (Log Shipper -> Loki)
+  # ===========================================
+  promtail:
+    image: grafana/promtail:2.9.6
+    container_name: speedcam-promtail
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # MySQL Exporter
+  # ===========================================
+  mysqld-exporter:
+    image: prom/mysqld-exporter:v0.15.1
+    container_name: speedcam-mysqld-exporter
+    volumes:
+      - ./monitoring/mysqld-exporter/.my.cnf:/cfg/.my.cnf:ro
+    command:
+      - "--config.my-cnf=/cfg/.my.cnf"
+    ports:
+      - "9104:9104"
+    restart: unless-stopped
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # Celery Exporter (Queue/Task Metrics)
+  # ===========================================
+  celery-exporter:
+    image: danihodovic/celery-exporter:0.10.3
+    container_name: speedcam-celery-exporter
+    environment:
+      CE_BROKER_URL: "amqp://sa:1234@rabbitmq:5672//"
+    ports:
+      - "9808:9808"
+    restart: unless-stopped
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # cAdvisor (Container Metrics)
+  # ===========================================
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: speedcam-cadvisor
+    profiles:
+      - linux
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8080:8080"
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # K6 Load Test Runner (on-demand)
+  # ===========================================
+  k6:
+    image: grafana/k6:latest
+    container_name: speedcam-k6
+    profiles:
+      - loadtest
+    volumes:
+      - ./k6:/scripts
+    environment:
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "true"
+      MAIN_SERVICE_URL: http://main:8000
+    networks:
+      - speedcam-network
+
+networks:
+  speedcam-network:
+    external: true

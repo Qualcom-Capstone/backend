@@ -1,0 +1,11 @@
+# OCR Service Requirements
+-r base.txt
+
+# OCR & Image Processing
+easyocr==1.7.2
+opencv-python-headless==4.10.0.84
+pillow==11.2.1
+
+# Google Cloud Storage
+google-cloud-storage==2.18.2
+

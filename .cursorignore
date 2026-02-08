@@ -7,14 +7,12 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-eggs/
-*.egg
 
 # Virtual Environment
 venv/
 env/
 ENV/
-.venv/
+.venv
 
 # IDE
 .vscode/
@@ -26,13 +24,11 @@ ENV/
 # Environment variables
 *.env
 .env.*
-!*.env.example
+backend.env
 
-# Credentials (실제 인증 파일 - 절대 커밋 금지)
+# Credentials (실제 인증 파일 - 민감 정보)
 credentials/*.json
 !credentials/*.example.json
-
-# Legacy FCM 폴더 (마이그레이션 후 삭제 예정)
 crud/fcm/*.json
 !crud/fcm/*.example.json
 
@@ -42,7 +38,7 @@ crud/fcm/*.json
 
 # Media files (uploaded content)
 media/
-staticfiles/
+static/
 
 # Logs
 *.log
@@ -51,6 +47,11 @@ logs/
 # Celery
 celerybeat-schedule
 celerybeat.pid
+
+# Git
+.git/
+
+# Docker (수정 허용)
 
 # Cache
 .cache/
@@ -66,16 +67,7 @@ coverage.xml
 .DS_Store
 Thumbs.db
 
-# pytest
-.pytest_cache/
+# Migrations (optional - 주석 해제하면 migration 파일도 무시)
+# */migrations/*.py
+# !*/migrations/__init__.py
 
-# mypy
-.mypy_cache/
-
-# Monitoring volumes
-docker/monitoring/grafana/data/
-docker/monitoring/prometheus/data/
-docker/monitoring/loki/data/
-
-# Claude Code
-.claude/

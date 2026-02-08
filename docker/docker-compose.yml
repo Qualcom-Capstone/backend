@@ -1,0 +1,120 @@
+services:
+  # ===========================================
+  # Infrastructure Services
+  # ===========================================
+  mysql:
+    image: mysql:8.0
+    container_name: speedcam-mysql
+    env_file:
+      - ../mysql.env
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "sa", "-p1234"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - speedcam-network
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: speedcam-rabbitmq
+    env_file:
+      - ../rabbitmq.env
+    ports:
+      - "5672:5672"
+      - "1883:1883"
+      - "15672:15672"
+      - "15692:15692"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    command: >
+      bash -c "rabbitmq-plugins enable --offline rabbitmq_mqtt rabbitmq_prometheus &&
+               rabbitmq-server"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - speedcam-network
+
+  # ===========================================
+  # Application Services
+  # ===========================================
+  main:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.main
+    container_name: speedcam-main
+    env_file:
+      - ../backend.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../credentials:/app/credentials:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - speedcam-network
+
+  ocr-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ocr
+    container_name: speedcam-ocr
+    env_file:
+      - ../backend.env
+    volumes:
+      - ../credentials:/app/credentials:ro
+    depends_on:
+      - main
+      - rabbitmq
+    networks:
+      - speedcam-network
+
+  alert-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.alert
+    container_name: speedcam-alert
+    env_file:
+      - ../backend.env
+    volumes:
+      - ../credentials:/app/credentials:ro
+    depends_on:
+      - main
+      - rabbitmq
+    networks:
+      - speedcam-network
+
+  flower:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.main
+    container_name: speedcam-flower
+    env_file:
+      - ../backend.env
+    command: celery -A config flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - rabbitmq
+    networks:
+      - speedcam-network
+
+volumes:
+  mysql_data:
+  rabbitmq_data:
+
+networks:
+  speedcam-network:
+    name: speedcam-network
+    driver: bridge

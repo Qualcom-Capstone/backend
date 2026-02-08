@@ -1,0 +1,45 @@
+name: Lint
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-lint-${{ hashFiles('requirements/dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-lint-
+
+      - name: Install lint dependencies
+        run: pip install flake8==7.1.1 black==24.10.0 isort==5.13.2
+
+      - name: Run flake8
+        run: flake8 . --count --show-source --statistics
+
+      - name: Run black (check)
+        run: black --check --diff --exclude='/(\.venv|migrations)/' .
+
+      - name: Run isort (check)
+        run: isort --check-only --diff --profile black --skip .venv --skip migrations .
