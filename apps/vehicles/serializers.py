@@ -21,7 +21,8 @@ class VehicleSerializer(serializers.ModelSerializer):
 class VehicleCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vehicle
-        fields = ["plate_number", "owner_name", "owner_phone", "fcm_token"]
+        fields = ["id", "plate_number", "owner_name", "owner_phone", "fcm_token"]
+        read_only_fields = ["id"]
 
 
 class FCMTokenUpdateSerializer(serializers.Serializer):
