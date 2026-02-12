@@ -118,7 +118,63 @@ def send_notification(self, detection_id: int):
 
 ### 3-1. 근본 원인 분석
 
-#### Django의 DB 커넥션 스레드 격리 메커니즘
+#### 원인 Layer 1: Gevent Monkey-Patching 순서 문제 (Late Patching)
+
+Alert Worker 시작 로그에서 다음 경고들이 확인된다:
+
+```
+# 실제 speedcam-alert 컨테이너 시작 로그
+MonkeyPatchWarning: Monkey-patching ssl after ssl has already been imported
+may lead to errors, including RecursionError on Python 3.6. It may also
+silently lead to incorrect behaviour on Python 3.7.
+Please monkey-patch earlier. See https://github.com/gevent/gevent/issues/1016.
+Modules that had direct imports (NOT patched):
+  ['urllib3.util.ssl_ (...)', 'urllib3.util (...)']
+```
+
+```
+Exception ignored in: <function _after_fork_in_child at 0x71500038ea20>
+  File "gevent/threading.py", line 264, in _after_fork_in_child
+    assert len(active) == 1
+           ^^^^^^^^^^^^^^^^
+AssertionError
+```
+
+> **📸 캡처 2-1**: Alert Worker 컨테이너 시작 로그 (경고 메시지 포함)
+> ```bash
+> gcloud compute ssh speedcam-alert --zone=asia-northeast3-a \
+>   -- sudo docker logs speedcam-alert 2>&1 | head -20
+> ```
+> - **캡처 항목**: `MonkeyPatchWarning`과 `AssertionError` 전문
+
+**이 경고가 발생하는 이유:**
+
+`start_alert_worker.sh`의 실행 체인:
+
+```
+opentelemetry-instrument → celery -A config worker --pool=gevent
+```
+
+```
+실행 순서 (시간순):
+1. opentelemetry-instrument 시작
+   → urllib3 import → ssl import됨 (이미 native ssl 모듈 로드)
+2. celery -A config worker --pool=gevent 실행
+3. Celery가 --pool=gevent 감지
+   → gevent.monkey.patch_all() 호출  ← 💥 ssl은 이미 import됨!
+4. ssl, 일부 threading 모듈이 불완전하게 패치된 상태로 동작
+```
+
+**영향:**
+- `_thread.get_ident()`는 패치되어 greenlet ID를 반환하지만
+- `threading.local()`의 일부 동작이 불완전할 수 있음
+- `_after_fork_in_child`에서 active 스레드 수가 예상과 다름 (AssertionError)
+- **결과**: greenlet 간 DB 커넥션 격리가 불안정해져 `validate_thread_sharing()` 에러 발생 확률 증가
+
+> **참고**: gevent 공식 문서는 monkey-patching을 "프로그램 생명주기에서 가능한 한 빨리, 다른 import보다 먼저" 수행하라고 권고한다.
+> 그러나 `opentelemetry-instrument` 래퍼가 먼저 실행되므로 현재 구조에서는 이를 완전히 제어하기 어렵다.
+
+#### 원인 Layer 2: Django의 DB 커넥션 스레드 격리 메커니즘
 
 Django는 `django/db/backends/base/base.py`의 `validate_thread_sharing()` 메서드로 DB 커넥션의 스레드 간 공유를 차단한다:
 
@@ -145,7 +201,7 @@ def validate_thread_sharing(self):
 > ```
 > - **캡처 항목**: 실제 배포된 Django 버전의 `validate_thread_sharing()` 소스코드 출력
 
-#### 핵심 메커니즘: Greenlet ≠ Thread이지만 다른 Thread ID를 가짐
+#### 원인 Layer 3: Greenlet ≠ Thread이지만 다른 Thread ID를 가짐
 
 ```
 [일반 스레드 모델]
@@ -162,7 +218,7 @@ gevent가 `monkey.patch_all()`을 실행하면:
 2. `_thread.get_ident()`가 greenlet ID를 반환하도록 패치됨
 3. 각 greenlet은 고유한 "스레드 ID"를 가지게 됨
 
-#### 왜 `autoretry_for=(Exception,)`이 문제를 악화시키는가
+#### 원인 Layer 4: `autoretry_for=(Exception,)`이 문제를 악화시키는가
 
 ```
 Timeline:
@@ -190,6 +246,20 @@ Timeline:
 | `_thread.get_ident()` | greenlet마다 다름 | 프로세스마다 독립 |
 | DB 커넥션 | greenlet 간 공유 위험 | 프로세스 격리로 안전 |
 
+#### 원인 계층 요약
+
+```
+Layer 1: Late Monkey-Patching (opentelemetry-instrument → ssl 먼저 import)
+    ↓ 불완전한 threading 패치
+Layer 2: Django validate_thread_sharing() 스레드 격리 검증
+    ↓ _thread.get_ident()로 커넥션 소유자 확인
+Layer 3: Greenlet마다 다른 Thread ID
+    ↓ greenlet-local 저장소에 커넥션 바인딩
+Layer 4: autoretry_for=(Exception,) 자동 재시도
+    ↓ 다른 greenlet에서 재시도 → stale 커넥션 접근
+    💥 DatabaseWrapper thread-sharing error
+```
+
 ### 3-2. 해결 방안 비교
 
 | 방안 | 설명 | 장점 | 단점 | 채택 |
@@ -199,6 +269,7 @@ Timeline:
 | **C. `CONN_MAX_AGE = 0` 설정** | 매 요청마다 커넥션 닫기 | Django 표준 방식 | Celery에서는 "요청" 개념 없음, 불충분 | ❌ |
 | **D. `inc_thread_sharing()` 사용** | 스레드 공유 허용 플래그 | 에러 해소 | race condition 위험, 비권장 | ❌ |
 | **E. gevent → prefork 전환** | Pool 타입 변경 | 근본 해결 | I/O 집약 태스크에 비효율적 | ❌ |
+| **F. OTel 래퍼 제거 후 코드 내 초기화** | monkey.patch_all()을 앱 진입점에서 먼저 호출 | Late patching 해소 | OTel 자동 계측 포기 | ⚠️ 장기 검토 |
 
 ### 3-3. 채택한 해결 방안: `db.close_old_connections()`
 
