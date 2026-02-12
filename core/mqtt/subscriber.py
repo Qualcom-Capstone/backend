@@ -5,6 +5,7 @@ import logging
 import os
 
 import paho.mqtt.client as mqtt
+from django.db import close_old_connections
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -63,6 +64,9 @@ class MQTTSubscriber:
         try:
             payload = json.loads(msg.payload.decode())
             logger.info(f"Received MQTT message: {payload.get('camera_id')}")
+
+            # 장기 실행 스레드에서 stale DB 연결 방지
+            close_old_connections()
 
             # Import here to avoid circular imports
             from apps.detections.models import Detection
