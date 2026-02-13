@@ -56,12 +56,11 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
     OCR 처리 Task
     - GCS에서 이미지 다운로드
     - EasyOCR 실행
-    - 직접 MySQL 업데이트 (Choreography 패턴)
+    - 처리 완료 후 detection.completed 이벤트 발행 (Choreography)
     - MSA: 각 서비스별 DB 사용
     """
     from apps.detections.models import Detection
     from apps.vehicles.models import Vehicle
-    from tasks.notification_tasks import send_notification
 
     try:
         # 1. 상태를 processing으로 업데이트 (detections_db)
@@ -130,13 +129,19 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
             except Exception as e:
                 logger.warning(f"Vehicle lookup failed: {e}")
 
-        # 7. Always send notification for completed detections
-        #    (dashboard gets topic notification; matched vehicle gets individual push)
+        # 7. detections.completed 이벤트 발행 (Choreography)
+        #    OCR은 알림 서비스의 존재를 모른다. 완료 사실만 발행하고 끝.
+        #    AMQP topic exchange를 통해 관심 있는 서비스가 독립적으로 구독.
         try:
-            send_notification.apply_async(args=[detection_id], queue="fcm_queue")
+            from core.events.publisher import publish_event
+
+            publish_event(
+                "detections.completed",
+                {"detection_id": detection_id},
+            )
         except Exception as e:
             logger.warning(
-                f"Failed to enqueue notification for detection {detection_id}: {e}"
+                f"Failed to publish completion event for detection {detection_id}: {e}"
             )
 
         logger.info(f"OCR completed for detection {detection_id}: {plate_number}")

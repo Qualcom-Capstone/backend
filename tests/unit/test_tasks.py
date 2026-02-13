@@ -80,13 +80,13 @@ class TestNotificationTaskMock:
 
     @pytest.mark.skipif(not firebase_available, reason="firebase_admin not installed")
     @patch("tasks.notification_tasks.os.environ.get")
-    def test_send_notification_mock_mode(self, mock_env, completed_detection):
-        """Mock 모드에서 알림 전송 테스트"""
+    def test_process_notification_mock_mode(self, mock_env, completed_detection):
+        """Mock 모드에서 알림 처리 테스트"""
         mock_env.return_value = "true"
 
-        from tasks.notification_tasks import send_notification
+        from tasks.notification_tasks import process_notification
 
-        result = send_notification(completed_detection.id)
+        result = process_notification(completed_detection.id)
 
         assert result["status"] in ["sent", "skipped"]
 
