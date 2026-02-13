@@ -250,16 +250,17 @@ def get_db_connection():
     # Try pymysql first
     try:
         import pymysql
+
         conn = pymysql.connect(
             host=DB_HOST,
             port=DB_PORT,
             user=DB_USER,
             password=DB_PASS,
             database=DB_NAME,
-            charset='utf8mb4',
-            cursorclass=pymysql.cursors.DictCursor
+            charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor,
         )
-        return conn, 'pymysql'
+        return conn, "pymysql"
     except ImportError:
         pass
     except Exception as e:
@@ -268,15 +269,16 @@ def get_db_connection():
     # Try mysql.connector
     try:
         import mysql.connector
+
         conn = mysql.connector.connect(
             host=DB_HOST,
             port=DB_PORT,
             user=DB_USER,
             password=DB_PASS,
             database=DB_NAME,
-            charset='utf8mb4'
+            charset="utf8mb4",
         )
-        return conn, 'mysql.connector'
+        return conn, "mysql.connector"
     except ImportError:
         pass
     except Exception as e:
@@ -289,7 +291,9 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
     """Verify the pipeline by querying MySQL database."""
     conn, driver = get_db_connection()
     if not conn:
-        print("\n⚠ WARNING: No MySQL driver available (pymysql or mysql-connector-python)")
+        print(
+            "\n⚠ WARNING: No MySQL driver available (pymysql or mysql-connector-python)"
+        )
         print("   Pipeline verification skipped. Install pymysql to enable:")
         print("   pip install pymysql")
         return None
@@ -314,7 +318,7 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
         """)
 
-        if driver == 'pymysql':
+        if driver == "pymysql":
             result = cursor.fetchone()
         else:  # mysql.connector
             result = cursor.fetchone()
@@ -322,7 +326,7 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
             columns = [desc[0] for desc in cursor.description]
             result = dict(zip(columns, result))
 
-        initial_total = result['total'] or 0
+        initial_total = result["total"] or 0
         print("\nInitial state (last 10 minutes):")
         print(f"  Total detections: {initial_total}")
         print(f"  - completed: {result['completed'] or 0}")
@@ -346,21 +350,23 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
                     WHERE created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
                 """)
 
-                if driver == 'pymysql':
+                if driver == "pymysql":
                     result = cursor.fetchone()
                 else:
                     result = cursor.fetchone()
                     columns = [desc[0] for desc in cursor.description]
                     result = dict(zip(columns, result))
 
-                processing = result['processing'] or 0
-                pending = result['pending'] or 0
+                processing = result["processing"] or 0
+                pending = result["pending"] or 0
 
                 if processing == 0 and pending == 0:
                     print(f"✓ Pipeline drained after {time.time() - wait_start:.1f}s")
                     break
 
-                print(f"  [{time.time() - wait_start:.1f}s] processing: {processing}, pending: {pending}")
+                print(
+                    f"  [{time.time() - wait_start:.1f}s] processing: {processing}, pending: {pending}"
+                )
                 time.sleep(2)
 
         # Final status
@@ -375,7 +381,7 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
         """)
 
-        if driver == 'pymysql':
+        if driver == "pymysql":
             final_result = cursor.fetchone()
         else:
             final_result = cursor.fetchone()
@@ -389,10 +395,12 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
         print(f"  - pending: {final_result['pending'] or 0}")
         print(f"  - failed: {final_result['failed'] or 0}")
 
-        total = final_result['total'] or 0
-        completed = final_result['completed'] or 0
+        total = final_result["total"] or 0
+        completed = final_result["completed"] or 0
         completion_rate = (completed / total * 100) if total > 0 else 0
-        print(f"  Pipeline completion rate: {completed}/{total} = {completion_rate:.1f}%")
+        print(
+            f"  Pipeline completion rate: {completed}/{total} = {completion_rate:.1f}%"
+        )
 
         cursor.close()
         return final_result
@@ -409,10 +417,14 @@ def print_hypothesis(scenario_name: str, config: Dict):
     print("=== HYPOTHESIS ===")
     print(f"  Scenario: {scenario_name.upper()} - {config['description']}")
     print(f"  Expected published: {config['expected_messages']} messages")
-    print(f"  Expected OCR throughput: ~{config['expected_throughput']} msg/s (OCR_CONCURRENCY=1, ~5s/image)")
-    if config['duration'] > 0:
-        expected_processed = int(config['expected_throughput'] * config['duration'])
-        print(f"  Expected processed in {config['duration']}s: ~{expected_processed} messages")
+    print(
+        f"  Expected OCR throughput: ~{config['expected_throughput']} msg/s (OCR_CONCURRENCY=1, ~5s/image)"
+    )
+    if config["duration"] > 0:
+        expected_processed = int(config["expected_throughput"] * config["duration"])
+        print(
+            f"  Expected processed in {config['duration']}s: ~{expected_processed} messages"
+        )
     print(f"  Expected queue depth at end: ~{config['expected_queue_depth']} messages")
     print(f"  Expected error rate: <{config['expected_error_rate']}%")
     print(f"{'='*60}\n")
@@ -426,8 +438,12 @@ def print_comparison(scenario_name: str, config: Dict, db_result: Optional[Dict]
     # Published vs Expected
     published = stats["published"]
     expected_pub = config["expected_messages"]
-    pub_match = abs(published - expected_pub) <= max(1, expected_pub * 0.1)  # 10% tolerance
-    print(f"  Published: {published} vs Expected: {expected_pub} {'✓ PASS' if pub_match else '✗ FAIL'}")
+    pub_match = abs(published - expected_pub) <= max(
+        1, expected_pub * 0.1
+    )  # 10% tolerance
+    print(
+        f"  Published: {published} vs Expected: {expected_pub} {'✓ PASS' if pub_match else '✗ FAIL'}"
+    )
 
     # Error rate
     failed = stats["failed"]
@@ -435,23 +451,27 @@ def print_comparison(scenario_name: str, config: Dict, db_result: Optional[Dict]
     actual_error_rate = (failed / total * 100) if total > 0 else 0
     expected_error_rate = config["expected_error_rate"]
     error_match = actual_error_rate <= expected_error_rate
-    err_status = '✓ PASS' if error_match else '✗ FAIL'
-    print(f"  Error rate: {actual_error_rate:.2f}% vs Expected: <{expected_error_rate}% {err_status}")
+    err_status = "✓ PASS" if error_match else "✗ FAIL"
+    print(
+        f"  Error rate: {actual_error_rate:.2f}% vs Expected: <{expected_error_rate}% {err_status}"
+    )
 
     # Queue depth (from DB if available)
     if db_result:
-        processing = db_result['processing'] or 0
-        pending = db_result['pending'] or 0
+        processing = db_result["processing"] or 0
+        pending = db_result["pending"] or 0
         actual_queue = processing + pending
-        expected_queue = config['expected_queue_depth']
+        expected_queue = config["expected_queue_depth"]
         print(f"  Queue depth: {actual_queue} vs Expected: ~{expected_queue} (INFO)")
 
         # Pipeline completion
-        completed = db_result['completed'] or 0
-        db_total = db_result['total'] or 0
+        completed = db_result["completed"] or 0
+        db_total = db_result["total"] or 0
         if db_total > 0:
             completion_rate = completed / db_total * 100
-            print(f"  Pipeline completion: {completion_rate:.1f}% ({completed}/{db_total})")
+            print(
+                f"  Pipeline completion: {completion_rate:.1f}% ({completed}/{db_total})"
+            )
 
     print(f"{'='*60}\n")
 
@@ -564,12 +584,10 @@ Examples:
   python mqtt-load-test.py smoke
   python mqtt-load-test.py baseline
   python mqtt-load-test.py saturation
-        """
+        """,
     )
     parser.add_argument(
-        "scenario",
-        choices=list(SCENARIOS.keys()),
-        help="Test scenario to run"
+        "scenario", choices=list(SCENARIOS.keys()), help="Test scenario to run"
     )
 
     args = parser.parse_args()

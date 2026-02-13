@@ -102,9 +102,7 @@ def process_notification(detection_id: int):
     vehicle = None
     if detection.vehicle_id:
         try:
-            vehicle = Vehicle.objects.using("vehicles_db").get(
-                id=detection.vehicle_id
-            )
+            vehicle = Vehicle.objects.using("vehicles_db").get(id=detection.vehicle_id)
         except Vehicle.DoesNotExist:
             logger.warning(f"Vehicle {detection.vehicle_id} not found")
 
