@@ -307,7 +307,8 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
         cursor = conn.cursor()
 
         # Initial check
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
@@ -316,7 +317,8 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
                 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
             FROM detections
             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
-        """)
+        """
+        )
 
         if driver == "pymysql":
             result = cursor.fetchone()
@@ -339,7 +341,8 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
             print(f"\nWaiting up to {max_wait_sec}s for pipeline to drain...")
             wait_start = time.time()
             while time.time() - wait_start < max_wait_sec:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT
                         COUNT(*) as total,
                         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
@@ -348,7 +351,8 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
                         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
                     FROM detections
                     WHERE created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
-                """)
+                """
+                )
 
                 if driver == "pymysql":
                     result = cursor.fetchone()
@@ -370,7 +374,8 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
                 time.sleep(2)
 
         # Final status
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
@@ -379,7 +384,8 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
                 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
             FROM detections
             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
-        """)
+        """
+        )
 
         if driver == "pymysql":
             final_result = cursor.fetchone()
