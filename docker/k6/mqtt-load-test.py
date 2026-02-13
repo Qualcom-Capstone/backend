@@ -323,7 +323,7 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
             result = dict(zip(columns, result))
 
         initial_total = result['total'] or 0
-        print(f"\nInitial state (last 10 minutes):")
+        print("\nInitial state (last 10 minutes):")
         print(f"  Total detections: {initial_total}")
         print(f"  - completed: {result['completed'] or 0}")
         print(f"  - processing: {result['processing'] or 0}")
@@ -382,7 +382,7 @@ def verify_pipeline(expected_count: int, max_wait_sec: int = 30) -> Optional[Dic
             columns = [desc[0] for desc in cursor.description]
             final_result = dict(zip(columns, final_result))
 
-        print(f"\nFinal state:")
+        print("\nFinal state:")
         print(f"  Total detections created: {final_result['total']}")
         print(f"  - completed: {final_result['completed'] or 0}")
         print(f"  - processing: {final_result['processing'] or 0}")
@@ -435,7 +435,8 @@ def print_comparison(scenario_name: str, config: Dict, db_result: Optional[Dict]
     actual_error_rate = (failed / total * 100) if total > 0 else 0
     expected_error_rate = config["expected_error_rate"]
     error_match = actual_error_rate <= expected_error_rate
-    print(f"  Error rate: {actual_error_rate:.2f}% vs Expected: <{expected_error_rate}% {'✓ PASS' if error_match else '✗ FAIL'}")
+    err_status = '✓ PASS' if error_match else '✗ FAIL'
+    print(f"  Error rate: {actual_error_rate:.2f}% vs Expected: <{expected_error_rate}% {err_status}")
 
     # Queue depth (from DB if available)
     if db_result:
@@ -476,7 +477,7 @@ def run_scenario(scenario_name: str):
 
         if success:
             print("\n=== RESULTS ===")
-            print(f"  Published: 1 | Failed: 0")
+            print("  Published: 1 | Failed: 0")
             print(f"  Avg Latency: {stats['total_latency_ms']:.2f}ms")
 
             # Wait a bit for pipeline
