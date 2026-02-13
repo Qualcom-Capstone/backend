@@ -31,7 +31,7 @@ and this is thread id 35804459008.
 > - `http://34.47.70.132:16686` → Service: `speedcam-alert`, Operation: `send_notification`
 > - 에러 span 클릭 → Logs 탭의 에러 메시지 전문
 
-같은 프로젝트의 OCR 워커(`--pool=prefork --concurrency=4`)는 멀쩡했다. Alert 워커만 터지고 있었다.
+혼란스러웠던 건, 로컬 개발 환경에서는 이 에러가 한 번도 발생하지 않았다는 점이다. 같은 코드, 같은 gevent pool인데 로컬에서는 멀쩡하고 GCP에 배포하니까 터졌다. 그리고 같은 프로젝트의 OCR 워커(`--pool=prefork --concurrency=4`)도 멀쩡했다. Alert 워커만 터지고 있었다.
 
 ```mermaid
 graph LR
@@ -139,7 +139,9 @@ flowchart LR
     style E fill:#ff6b6b,color:#fff
 ```
 
-gevent 공식 문서는 monkey-patching을 "가능한 한 빨리, 다른 import보다 먼저" 하라고 권고한다. 하지만 `opentelemetry-instrument` 래퍼가 먼저 실행되면서 패치 순서가 꼬인다. 이로 인해 threading 관련 패치가 불완전해지고, greenlet 간 DB 커넥션 격리가 더 불안정해진다.
+gevent 공식 문서는 monkey-patching을 "가능한 한 빨리, 다른 import보다 먼저" 하라고 권고한다. 하지만 배포 환경에서는 `opentelemetry-instrument` 래퍼가 먼저 실행되면서 패치 순서가 꼬인다. 이로 인해 `threading.local()`이 greenlet-local로 완전히 패치되지 못하고, greenlet 간 DB 커넥션 격리가 무너진다.
+
+**로컬에서 발생하지 않았던 이유가 여기에 있었다.** 로컬에서는 `celery -A config worker --pool=gevent`를 직접 실행한다. OTel 래퍼 없이 Celery가 직접 시작되므로 `monkey.patch_all()`이 충분히 일찍 호출되고, `threading.local()`이 정상적으로 greenlet-local로 패치된다. 각 greenlet이 자기만의 DB connections를 갖게 되어 스레드 ID 불일치가 일어나지 않는다. 배포 환경에서만 `opentelemetry-instrument`가 끼어들면서 패치 순서가 뒤집힌 것이다.
 
 ### 원인 요약
 
