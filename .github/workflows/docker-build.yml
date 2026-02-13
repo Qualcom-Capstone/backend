@@ -2,18 +2,26 @@ name: Docker Build
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, main]
   pull_request:
-    branches: [develop]
+    branches: [develop, main]
 
 concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  AR_REGION: asia-northeast3
+  GCP_PROJECT_ID: project-4f918446-ebe5-4774-a52
+  AR_REPO: speedcam
+
 jobs:
   build:
     name: ${{ matrix.service.name }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     strategy:
       fail-fast: false
@@ -33,12 +41,39 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build ${{ matrix.service.name }} image
+      - name: Authenticate to Google Cloud
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: gcloud auth configure-docker ${{ env.AR_REGION }}-docker.pkg.dev
+
+      - name: Build and push ${{ matrix.service.name }} image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.service.dockerfile }}
-          push: false
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
           cache-from: type=gha,scope=${{ matrix.service.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
-          tags: speedcam/${{ matrix.service.name }}:ci-${{ github.sha }}
+          tags: |
+            ${{ env.AR_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/speedcam-${{ matrix.service.name }}:latest
+            ${{ env.AR_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/speedcam-${{ matrix.service.name }}:${{ github.sha }}
+
+  trigger-deploy:
+    name: Trigger Deploy
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger depoly CD workflow
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.BACKEND_DEPLOY_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository_owner }}/depoly/dispatches \
+            -d '{"event_type":"deploy-backend","client_payload":{"image_tag":"${{ github.sha }}","triggered_by":"${{ github.actor }}"}}'

@@ -105,11 +105,13 @@ graph TB
     OCR -->|6. 이미지 다운로드| GCS
     OCR -->|7. 결과 업데이트| MySQL_Detections
     OCR -->|7-1. 차량 조회| MySQL_Vehicles
-    OCR -->|8. AMQP Publish| AMQP
+    OCR -->|8. MQTT Publish<br/>detections/completed| MQTT
+    MQTT -->|9. MQTT Subscribe| Django
+    Django -->|10. AMQP Publish| AMQP
     AMQP -->|fcm_queue| FCM
-    FCM -->|9. 차량/토큰 조회| MySQL_Vehicles
-    FCM -->|10. 푸시 전송| Firebase
-    FCM -->|11. 이력 저장| MySQL_Notifications
+    FCM -->|11. 차량/토큰 조회| MySQL_Vehicles
+    FCM -->|12. 푸시 전송| Firebase
+    FCM -->|13. 이력 저장| MySQL_Notifications
 ```
 
 ### 2.4 이벤트 흐름 (Sequence Diagram)
@@ -140,16 +142,17 @@ sequenceDiagram
     OCR->>OCR: 8. EasyOCR 실행
     OCR->>DDB: 9. 직접 업데이트 (status=completed)
     OCR->>VDB: 10. 번호판으로 Vehicle 조회
-    alt 차량 & FCM 토큰 존재
-        OCR->>DDB: 11. vehicle_id 매핑
-        OCR->>AMQP: 12. Publish to fcm_exchange (Direct)
-    end
-    
-    AMQP->>FCM: 13. Consume from fcm_queue
-    FCM->>DDB: 14. Detection 조회
-    FCM->>VDB: 15. Vehicle/FCM 토큰 조회
-    FCM->>FCM: 16. FCM API 호출
-    FCM->>NDB: 17. 알림 이력 저장
+    OCR->>DDB: 11. vehicle_id 매핑
+    OCR->>MQTT: 12. MQTT Publish (detections/completed)
+
+    MQTT->>Django: 13. MQTT Subscribe (detections/completed)
+    Django->>AMQP: 14. Publish to fcm_exchange
+
+    AMQP->>FCM: 15. Consume from fcm_queue
+    FCM->>DDB: 16. Detection 조회
+    FCM->>VDB: 17. Vehicle/FCM 토큰 조회
+    FCM->>FCM: 18. FCM API 호출
+    FCM->>NDB: 19. 알림 이력 저장
 ```
 
 ---
@@ -181,11 +184,15 @@ sequenceDiagram
 | Image Processing | OpenCV | 4.10.0.84 |
 | Image Library | Pillow | 11.2.1 |
 
-### 3.4 Monitoring (Optional)
+### 3.4 Monitoring & Observability
 | 구분 | 기술 | 용도 |
 |------|------|------|
+| Metrics | Prometheus + Grafana | 시스템/컨테이너 메트릭 수집 및 시각화 |
+| Logging | Loki + Promtail | 중앙 집중식 로그 수집 및 검색 |
+| Tracing | OpenTelemetry + Jaeger | 분산 트레이싱 (서비스 간 요청 추적) |
 | Task Monitoring | Flower | Celery Task 모니터링 |
 | Queue Dashboard | RabbitMQ Management | Queue 상태 확인 |
+| Container Metrics | cAdvisor | 컨테이너 리소스 사용량 |
 
 ---
 
@@ -397,15 +404,17 @@ graph LR
         direction TB
         M1[Raspberry Pi] -->|Publish| M2[detections/new]
         M2 -->|Subscribe| M3[Django]
+        M4[OCR Worker] -->|Publish| M5[detections/completed]
+        M5 -->|Subscribe| M3
     end
-    
+
     subgraph AMQP["AMQP (Port 5672)"]
         direction TB
         A1[Django] -->|Publish| A2[ocr_exchange]
         A2 -->|Route| A3[ocr_queue]
         A3 -->|Consume| A4[OCR Worker]
-        
-        A4 -->|Publish| A5[fcm_exchange]
+
+        A1 -->|Publish| A5[fcm_exchange]
         A5 -->|Route| A6[fcm_queue]
         A6 -->|Consume| A7[Alert Worker]
     end
@@ -413,8 +422,8 @@ graph LR
 
 | 프로토콜 | 용도 | 특징 |
 |----------|------|------|
-| **MQTT** | Raspberry Pi → Django | 경량 프로토콜, IoT 디바이스에 적합, QoS 1 |
-| **AMQP** | Django ↔ Celery Workers | 안정적인 메시지 전달, Exchange/Queue 라우팅 |
+| **MQTT** | IoT → Django, OCR → Django (도메인 이벤트) | 경량 프로토콜, QoS 1, Choreography 이벤트 전파 |
+| **AMQP** | Django → Celery Workers (Task 분배) | 안정적인 메시지 전달, Exchange/Queue 라우팅 |
 
 ### 5.2 Exchange 설계
 
@@ -511,6 +520,18 @@ QUEUES = {
     │ 처리 완료
     │ Detection 업데이트 (detections_db)
     │ Vehicle 조회 (vehicles_db)
+    │
+    │ MQTT Publish (Choreography)
+    │ Topic: detections/completed
+    │ QoS: 1
+    ▼
+[RabbitMQ MQTT Plugin]
+    │
+    │ MQTT Subscribe
+    ▼
+[Django MQTT Subscriber]
+    │
+    │ 이벤트 수신 & 라우팅
     │
     │ AMQP Publish
     │ Exchange: fcm_exchange
@@ -674,7 +695,8 @@ backend/
 │   ├── __init__.py
 │   ├── mqtt/
 │   │   ├── __init__.py
-│   │   └── subscriber.py        # Main Service 전용
+│   │   ├── publisher.py         # 도메인 이벤트 발행 (Choreography)
+│   │   └── subscriber.py        # 도메인 이벤트 수신 및 라우팅
 │   ├── gcs/
 │   │   ├── __init__.py
 │   │   └── client.py            # GCS 클라이언트
@@ -743,6 +765,7 @@ easyocr==1.7.2
 opencv-python-headless==4.10.0.84
 pillow==11.2.1
 google-cloud-storage==2.18.2
+paho-mqtt==2.1.0
 ```
 
 **requirements/alert.txt** (Alert Service)
@@ -1015,81 +1038,132 @@ app.autodiscover_tasks(['tasks'])
 import json
 import os
 import logging
-import threading
 import paho.mqtt.client as mqtt
 from django.utils import timezone
-from apps.detections.models import Detection
-from tasks.ocr_tasks import process_ocr
+from django.utils.dateparse import parse_datetime
 
 logger = logging.getLogger(__name__)
 
 class MQTTSubscriber:
+    """
+    RabbitMQ MQTT Plugin을 통해 도메인 이벤트를 수신하는 Subscriber
+
+    Choreography 패턴: 각 서비스는 이벤트를 발행하고,
+    관심 있는 서비스가 독립적으로 구독하여 처리한다.
+
+    구독 토픽:
+    - detections/new      : IoT 디바이스 → Detection 생성 → OCR 발행
+    - detections/completed : OCR 완료 이벤트 → Notification 발행
+    """
+
     def __init__(self):
         self.client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            protocol=mqtt.MQTTv5,
+            protocol=mqtt.MQTTv311,
             client_id=f"django-main-{os.getpid()}"
         )
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect
-        
-        # 인증 설정
-        username = os.getenv('MQTT_USER', 'sa')
-        password = os.getenv('MQTT_PASS', '1234')
+
+        username = os.getenv('MQTT_USER', '')
+        password = os.getenv('MQTT_PASS', '')
         self.client.username_pw_set(username, password)
-    
-    def on_connect(self, client, userdata, flags, rc, properties=None):
-        logger.info(f"Connected to MQTT broker with code {rc}")
-        client.subscribe("detections/new", qos=1)
-    
+
+    def on_connect(self, client, userdata, flags, reason_code, properties):
+        if reason_code.is_failure:
+            logger.error(f"MQTT connection failed: {reason_code}")
+        else:
+            logger.info("Connected to MQTT broker")
+            client.subscribe("detections/new", qos=1)
+            client.subscribe("detections/completed", qos=1)
+
     def on_message(self, client, userdata, msg):
+        """토픽별 메시지 라우팅"""
         try:
             payload = json.loads(msg.payload.decode())
-            logger.info(f"Received MQTT message: {payload}")
-            
-            # 1. pending 레코드 즉시 생성 (detections_db)
-            detection = Detection.objects.using('detections_db').create(
-                camera_id=payload.get('camera_id'),
-                location=payload.get('location'),
-                detected_speed=payload['detected_speed'],
-                speed_limit=payload.get('speed_limit', 60.0),
-                detected_at=payload.get('detected_at', timezone.now()),
-                image_gcs_uri=payload['image_gcs_uri'],
-                status='pending'
-            )
-            
-            logger.info(f"Created detection {detection.id} with pending status")
-            
-            # 2. OCR Task 발행 (AMQP)
-            process_ocr.apply_async(
-                args=[detection.id],
-                kwargs={'gcs_uri': payload['image_gcs_uri']},
-                queue='ocr_queue',
-                priority=5
-            )
-            
-            logger.info(f"Dispatched OCR task for detection {detection.id}")
-            
-        except Exception as e:
-            logger.error(f"Error processing MQTT message: {e}")
-    
-    def on_disconnect(self, client, userdata, rc, properties=None):
-        logger.warning(f"Disconnected from MQTT broker with code {rc}")
-    
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in MQTT message: {e}")
+            return
+
+        if msg.topic == "detections/new":
+            self._handle_new_detection(payload)
+        elif msg.topic == "detections/completed":
+            self._handle_detection_completed(payload)
+        else:
+            logger.warning(f"Unknown MQTT topic: {msg.topic}")
+
+    def _handle_new_detection(self, payload):
+        """detections/new → Detection 생성 → OCR Task 발행"""
+        from apps.detections.models import Detection
+        from tasks.ocr_tasks import process_ocr
+
+        detection = Detection.objects.using('detections_db').create(
+            camera_id=payload.get('camera_id'),
+            location=payload.get('location'),
+            detected_speed=payload['detected_speed'],
+            speed_limit=payload.get('speed_limit', 60.0),
+            detected_at=payload.get('detected_at', timezone.now()),
+            image_gcs_uri=payload['image_gcs_uri'],
+            status='pending'
+        )
+
+        process_ocr.apply_async(
+            args=[detection.id],
+            kwargs={'gcs_uri': payload['image_gcs_uri']},
+            queue='ocr_queue',
+            priority=5
+        )
+
+    def _handle_detection_completed(self, payload):
+        """detections/completed → Notification Task 발행 (Choreography)"""
+        detection_id = payload["detection_id"]
+
+        from tasks.notification_tasks import send_notification
+        send_notification.apply_async(
+            args=[detection_id], queue="fcm_queue"
+        )
+
     def start(self):
         host = os.getenv('RABBITMQ_HOST', 'rabbitmq')
         port = int(os.getenv('MQTT_PORT', 1883))
-        logger.info(f"Connecting to MQTT broker at {host}:{port}")
         self.client.connect(host, port, 60)
         self.client.loop_forever()
+```
 
-def start_mqtt_subscriber():
-    """백그라운드 스레드에서 MQTT Subscriber 시작"""
-    subscriber = MQTTSubscriber()
-    thread = threading.Thread(target=subscriber.start, daemon=True)
-    thread.start()
-    logger.info("MQTT Subscriber started in background thread")
+```python
+# core/mqtt/publisher.py
+"""도메인 이벤트 발행"""
+import json
+import logging
+import os
+import paho.mqtt.client as mqtt
+
+logger = logging.getLogger(__name__)
+
+def publish_event(topic: str, payload: dict):
+    """Choreography 패턴에서 서비스 간 이벤트 전파"""
+    host = os.getenv("RABBITMQ_HOST", "rabbitmq")
+    port = int(os.getenv("MQTT_PORT", 1883))
+
+    client = mqtt.Client(
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        protocol=mqtt.MQTTv311,
+        client_id="",
+    )
+    client.username_pw_set(
+        os.getenv("MQTT_USER", ""),
+        os.getenv("MQTT_PASS", "")
+    )
+
+    try:
+        client.connect(host, port, keepalive=10)
+        client.loop_start()
+        result = client.publish(topic, json.dumps(payload), qos=1)
+        result.wait_for_publish(timeout=5)
+    finally:
+        client.loop_stop()
+        client.disconnect()
 ```
 
 ### 9.2 OCR Service (Celery Worker)
@@ -1123,8 +1197,7 @@ def mock_ocr_result():
 def process_ocr(self, detection_id: int, gcs_uri: str):
     from apps.detections.models import Detection
     from apps.vehicles.models import Vehicle
-    from tasks.notification_tasks import send_notification
-    
+
     logger.info(f"Processing OCR for detection {detection_id}")
     
     try:
@@ -1180,14 +1253,18 @@ def process_ocr(self, detection_id: int, gcs_uri: str):
                 if vehicle:
                     detection.vehicle_id = vehicle.id
                     detection.save(update_fields=['vehicle_id', 'updated_at'])
-                    
-                    # 7. FCM 토큰이 있으면 알림 Task 발행
-                    if vehicle.fcm_token:
-                        send_notification.apply_async(
-                            args=[detection_id],
-                            queue='fcm_queue'
-                        )
-        
+
+        # 7. detection.completed 이벤트 발행 (Choreography)
+        #    OCR은 알림의 존재를 모른다. 이벤트만 발행하고 끝.
+        try:
+            from core.mqtt.publisher import publish_event
+            publish_event(
+                "detections/completed",
+                {"detection_id": detection_id},
+            )
+        except Exception as e:
+            logger.warning(f"Failed to publish completion event: {e}")
+
         logger.info(f"OCR completed for detection {detection_id}: {plate_number}")
         return {
             'detection_id': detection_id,
@@ -1617,8 +1694,8 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 - DLQ로 실패한 Task 별도 관리
 
 ### 12.4 프로토콜 분리
-- **MQTT**: IoT 디바이스(Raspberry Pi) 통신용 경량 프로토콜
-- **AMQP**: 백엔드 서비스 간 안정적인 메시지 전달
+- **MQTT**: 도메인 이벤트 전파 (IoT→Main, OCR→Main) — Choreography 패턴의 이벤트 버스
+- **AMQP**: Task 분배 (Main→Workers) — Celery를 통한 안정적인 작업 큐잉
 
 ### 12.5 GIL 병목 회피
 - **OCR Worker**: `prefork` pool (multiprocessing) - CPU 집약적
@@ -1643,3 +1720,9 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 |     |         | - Python 3.12로 버전 업데이트 |
 |     |         | - DataDog 관련 설정 제거 (Optional) |
 |     |         | - Mock 모드 추가 (OCR_MOCK, FCM_MOCK) |
+| 3.0 | 2026-02 | Choreography 패턴 구현 반영 |
+|     |         | - OCR → Alert 직접 호출 제거 (Orchestration → Choreography) |
+|     |         | - MQTT Event Publisher 추가 (detections/completed) |
+|     |         | - Subscriber 토픽 라우팅 구현 |
+|     |         | - Monitoring 스택 반영 (Prometheus, Grafana, Loki, Jaeger) |
+|     |         | - OCR Service에 paho-mqtt 의존성 추가 |

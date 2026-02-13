@@ -381,3 +381,21 @@ http://localhost:5173 에 접속하여 결과물을 조회합니다.
 
 <br />
 <br />
+
+## 저장소 책임 범위
+
+> "Django API와 Celery Worker의 소스 코드, Dockerfile, 로컬 개발 환경을 소유한다"
+
+| 항목 | 이 저장소 | depoly 저장소 |
+|------|----------|--------------|
+| 애플리케이션 소스 코드 | O | X |
+| Dockerfile (3개) | O | X |
+| 로컬 개발 docker-compose | O | X |
+| 로컬 개발 모니터링 설정 | O | X |
+| 로컬 개발 env.example | O | X |
+| GitHub Actions CI (빌드/테스트) | O | X |
+| 프로덕션 compose 파일 | X | O |
+| 프로덕션 모니터링 설정 | X | O |
+| 프로덕션 env 템플릿 | X | O |
+| GitHub Actions CD (배포) | X | O |
+| 배포 스크립트/문서 | X | O |

@@ -72,8 +72,6 @@ services:
     container_name: speedcam-ocr
     env_file:
       - ../backend.env
-    volumes:
-      - ../credentials:/app/credentials:ro
     depends_on:
       - main
       - rabbitmq
