@@ -8,4 +8,3 @@ pillow==11.2.1
 
 # Google Cloud Storage
 google-cloud-storage==2.18.2
-

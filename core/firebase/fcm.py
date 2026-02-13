@@ -31,7 +31,7 @@ def initialize_firebase():
         firebase_admin.initialize_app(cred)
         logger.info(f"Firebase initialized with credentials: {cred_path}")
     else:
-        # GOOGLE_APPLICATION_CREDENTIALS 사용
+        # ADC (Application Default Credentials) 사용
         firebase_admin.initialize_app()
         logger.info("Firebase initialized with default credentials")
 
