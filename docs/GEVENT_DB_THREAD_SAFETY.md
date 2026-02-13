@@ -166,9 +166,9 @@ flowchart TB
 
 원인을 파악했으니 해결 방안을 검토했다. 핵심은 **"어떤 비용을 감수할 것인가"**였다.
 
-**방안 A. `db.close_old_connections()` — 태스크 시작 시 호출**
+**방안 A. 커넥션 소유권 이전 + `db.close_old_connections()`**
 
-매 태스크가 실행될 때마다 모든 DB alias의 stale 커넥션을 닫는다. 다음 ORM 호출 시 현재 greenlet에서 새 커넥션이 생성된다.
+태스크 시작 시 모든 DB 커넥션의 `_thread_ident`를 현재 greenlet ID로 갱신한 뒤, stale 커넥션을 닫는다. 소유권을 먼저 이전해야 `close()` 내부의 `validate_thread_sharing()` 검증을 통과할 수 있다. 이후 ORM 호출 시 현재 greenlet에서 새 커넥션이 생성된다.
 - *Trade-off*: 매번 커넥션을 새로 맺는 오버헤드가 발생한다. 하지만 Alert Worker의 태스크는 FCM 전송(네트워크 I/O)이 병목이므로 DB 커넥션 생성 비용(~1ms)은 무시할 수 있는 수준이다.
 
 **방안 B. Celery Signal(`task_prerun`) — 전역 훅**
@@ -216,18 +216,23 @@ def send_notification(self, detection_id: int):
 
 **수정 후:**
 ```python
+import _thread
 from django import db
 
 @shared_task(bind=True, max_retries=3, autoretry_for=(Exception,), ...)
 def send_notification(self, detection_id: int):
-    db.close_old_connections()  # gevent greenlet 간 stale 커넥션 정리
+    # 현재 greenlet으로 커넥션 소유권 이전 → stale 커넥션 정리
+    current_ident = _thread.get_ident()
+    for conn in db.connections.all():
+        conn._thread_ident = current_ident
+    db.close_old_connections()
 
     from apps.detections.models import Detection
     # ...
     detection = Detection.objects.using("detections_db").get(...)  # ✅
 ```
 
-`close_old_connections()`는 모든 DB alias를 순회하며 사용 불가능하거나 수명이 초과된 커넥션을 닫는다. 이후 ORM 호출 시 현재 greenlet에서 새 커넥션이 생성되므로 `_thread_ident`가 일치하게 된다.
+단순히 `close_old_connections()`만 호출하면 `close()` 내부에서도 `validate_thread_sharing()`이 실행되어 같은 에러가 발생한다. 커넥션의 `_thread_ident`를 현재 greenlet ID로 먼저 갱신해야 정리가 가능하다. 이후 ORM 호출 시 현재 greenlet에서 새 커넥션이 생성되므로 `_thread_ident`가 자연스럽게 일치한다.
 
 > **📸 캡처 4**: 수정 코드 diff
 > - `git diff -- tasks/notification_tasks.py`
