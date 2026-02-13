@@ -3,7 +3,10 @@
 import logging
 import os
 
+import _thread
+
 from celery import shared_task
+from django import db
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,14 @@ def send_notification(self, detection_id: int):
     - 매칭된 차량 개별 푸시 (차량 있는 경우)
     - MSA: 각 서비스별 DB에서 조회
     """
+    # OTel late patching으로 threading.local이 greenlet-local로 패치되지 않아
+    # 다른 greenlet이 만든 커넥션이 공유됨. 현재 greenlet ID로 소유권을 이전한 뒤
+    # stale 커넥션을 정리해야 close() 시 validate_thread_sharing()을 통과한다.
+    current_ident = _thread.get_ident()
+    for conn in db.connections.all():
+        conn._thread_ident = current_ident
+    db.close_old_connections()
+
     from apps.detections.models import Detection
     from apps.notifications.models import Notification
     from apps.vehicles.models import Vehicle
