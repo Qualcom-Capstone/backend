@@ -160,19 +160,37 @@ flowchart TB
     style ERR fill:#ff6b6b,color:#fff
 ```
 
-### 해결: 어떻게 고칠 것인가
+### 해결 방안 비교
 
-원인은 찾았다. 이제 고쳐야 하는데, 가장 먼저 떠오른 건 아예 gevent를 걷어내는 것이었다. prefork로 바꾸면 문제 자체가 사라진다. 하지만 Alert Worker는 FCM 푸시라는 I/O 바운드 작업에 특화되어 있다. prefork로 동시 100개를 처리하려면 프로세스 100개가 필요하고, 그건 메모리 낭비다. gevent를 쓰는 이유가 있었다.
+원인을 파악했으니 해결 방안을 검토했다. 핵심은 **"어떤 비용을 감수할 것인가"**였다.
 
-그러면 Django 쪽에서 검증을 꺼버릴까? `inc_thread_sharing()`이라는 escape hatch가 있다. 커넥션의 스레드 공유를 허용하는 플래그다. 에러는 당장 사라지겠지만, 여러 greenlet이 같은 커넥션을 동시에 사용할 수 있게 된다. race condition으로 데이터가 꼬일 위험을 안고 가는 셈이다. Django 공식 문서도 이 방식을 권장하지 않는다.
+**방안 A. `db.close_old_connections()` — 태스크 시작 시 호출**
 
-`CONN_MAX_AGE = 0`도 잠깐 고려했는데, 이건 Django의 요청-응답 사이클이 끝날 때 커넥션을 닫는 방식이다. Celery 태스크에는 "요청"이라는 개념 자체가 없으므로 트리거되지 않는다.
+매 태스크가 실행될 때마다 모든 DB alias의 stale 커넥션을 닫는다. 다음 ORM 호출 시 현재 greenlet에서 새 커넥션이 생성된다.
+- *Trade-off*: 매번 커넥션을 새로 맺는 오버헤드가 발생한다. 하지만 Alert Worker의 태스크는 FCM 전송(네트워크 I/O)이 병목이므로 DB 커넥션 생성 비용(~1ms)은 무시할 수 있는 수준이다.
 
-Late patching을 근본적으로 해결하려면 `opentelemetry-instrument` 래퍼를 제거하고 코드 내에서 `monkey.patch_all()`을 직접 먼저 호출하는 방법도 있다. 하지만 그러면 OTel 자동 계측을 포기해야 하고, 직접 계측 코드를 유지보수해야 한다. 모니터링 인프라를 한창 구축하는 시점에 자동 계측을 포기하는 건 배보다 배꼽이 더 크다.
+**방안 B. Celery Signal(`task_prerun`) — 전역 훅**
 
-Celery Signal(`task_prerun`)로 전역 훅을 거는 것도 깔끔해 보였다. 태스크 코드를 안 건드려도 되니까. 하지만 이건 OCR Worker처럼 이 이슈가 없는 워커에도 매번 커넥션을 닫게 된다. 그리고 Signal은 암묵적으로 동작하기 때문에 나중에 "왜 커넥션이 자꾸 끊기지?"라는 디버깅 지옥에 빠질 수 있다.
+```python
+@signals.task_prerun.connect
+def close_db_connections(**kwargs):
+    close_old_connections()
+```
 
-결국 가장 단순한 방법으로 돌아왔다. **태스크 시작 시 `db.close_old_connections()`를 호출**하는 것이다. 매번 커넥션을 새로 맺는 오버헤드가 있지만, Alert Worker의 병목은 FCM 네트워크 I/O다. DB 커넥션 생성 비용(~1ms)은 그에 비하면 무시할 수 있다. 코드 변경은 한 줄이고, 영향 범위는 해당 태스크로 한정되며, "왜 이 코드가 있는지"도 주석 한 줄이면 충분하다.
+태스크 코드를 수정하지 않아도 되지만, 모든 태스크에 전역으로 적용된다. 문제는 OCR Worker처럼 이 이슈가 없는 워커에도 불필요하게 커넥션을 닫게 된다는 점이다. 그리고 Signal은 암묵적으로 동작하기 때문에 나중에 "왜 커넥션이 자꾸 끊기지?"라는 디버깅 지옥에 빠질 수 있다.
+- *Trade-off*: 코드 수정 없음 vs. 전역 부작용 + 디버깅 난이도
+
+**방안 C. `inc_thread_sharing()` — 스레드 공유 허용**
+
+Django가 제공하는 escape hatch. 커넥션의 스레드 검증을 끈다. 에러는 사라지지만, 여러 greenlet이 같은 커넥션을 동시에 사용할 수 있게 되어 race condition 위험이 생긴다. Django 공식 문서도 이 방식을 권장하지 않는다.
+- *Trade-off*: 에러 해소 vs. 데이터 정합성 위험
+
+**방안 D. gevent → prefork 전환**
+
+근본적으로 gevent를 쓰지 않으면 문제 자체가 없다. 하지만 Alert Worker는 FCM 푸시라는 I/O 바운드 작업에 특화되어 있고, prefork의 프로세스 기반 모델은 동시 100개 처리에 메모리 비효율적이다.
+- *Trade-off*: 문제 근본 해결 vs. I/O 집약 워크로드에 부적합
+
+**결론: 방안 A를 채택했다.** 코드 변경이 한 줄이고, 영향 범위가 해당 태스크로 한정되며, 커넥션 재생성 비용은 FCM 네트워크 I/O 대비 무시할 수 있다.
 
 ```mermaid
 quadrantChart
@@ -181,9 +199,8 @@ quadrantChart
     y-axis 낮은 안정성 --> 높은 안정성
     A. close_old_connections: [0.25, 0.78]
     B. Celery Signal: [0.2, 0.6]
-    D. inc_thread_sharing: [0.35, 0.2]
-    E. prefork 전환: [0.85, 0.9]
-    F. OTel 래퍼 제거: [0.75, 0.75]
+    C. inc_thread_sharing: [0.35, 0.2]
+    D. prefork 전환: [0.85, 0.9]
 ```
 
 **수정 전:**
