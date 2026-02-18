@@ -15,11 +15,10 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 
 # Exchange 정의
 ocr_exchange = Exchange("ocr_exchange", type="direct", durable=True)
+fcm_exchange = Exchange("fcm_exchange", type="direct", durable=True)
 dlq_exchange = Exchange("dlq_exchange", type="fanout", durable=True)
 
 # Queue 정의
-# Note: fcm_queue 제거 — Alert Service는 Celery Command가 아닌
-# AMQP domain_events exchange의 detections.completed 이벤트를 직접 구독 (Choreography)
 app.conf.task_queues = (
     Queue(
         "ocr_queue",
@@ -29,6 +28,15 @@ app.conf.task_queues = (
             "x-dead-letter-exchange": "dlq_exchange",
             "x-message-ttl": 3600000,
             "x-max-priority": 10,
+        },
+    ),
+    Queue(
+        "fcm_queue",
+        exchange=fcm_exchange,
+        routing_key="fcm",
+        queue_arguments={
+            "x-dead-letter-exchange": "dlq_exchange",
+            "x-message-ttl": 3600000,
         },
     ),
     Queue(
@@ -44,6 +52,11 @@ app.conf.task_routes = {
         "queue": "ocr_queue",
         "exchange": "ocr_exchange",
         "routing_key": "ocr",
+    },
+    "tasks.notification_tasks.send_notification": {
+        "queue": "fcm_queue",
+        "exchange": "fcm_exchange",
+        "routing_key": "fcm",
     },
     "tasks.dlq_tasks.process_dlq_message": {
         "queue": "dlq_queue",

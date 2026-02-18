@@ -11,7 +11,6 @@ detections.completed 이벤트를 구독하여 알림 발송 여부를 결정한
 import json
 import logging
 import os
-import time
 
 from kombu import Connection, Exchange, Queue
 from kombu.mixins import ConsumerMixin
@@ -71,29 +70,18 @@ class AlertEventConsumer(ConsumerMixin):
 
         Alert Service의 자율적 판단:
         "OCR이 완료됐으니 알림을 보내야겠다"
+
+        Celery gevent worker에 위임하여 비동기 병렬 처리.
         """
         detection_id = payload["detection_id"]
         logger.info(
             f"Detection {detection_id} completed event received — "
-            f"processing notification"
+            f"dispatching to FCM worker"
         )
 
-        max_retries = 3
-        for attempt in range(max_retries + 1):
-            try:
-                from tasks.notification_tasks import process_notification
+        from tasks.notification_tasks import send_notification
 
-                process_notification(detection_id)
-                return
-            except Exception as e:
-                if "DoesNotExist" in type(e).__name__ and attempt < max_retries:
-                    logger.warning(
-                        f"Detection {detection_id} not ready, "
-                        f"retry {attempt + 1}/{max_retries}"
-                    )
-                    time.sleep(3)
-                else:
-                    raise
+        send_notification.delay(detection_id)
 
 
 def start_event_consumer():
