@@ -20,7 +20,6 @@ dlq_exchange = Exchange("dlq_exchange", type="fanout", durable=True)
 
 # Queue 정의
 app.conf.task_queues = (
-    # 새로운 Queue (PRD 구조)
     Queue(
         "ocr_queue",
         exchange=ocr_exchange,
@@ -49,7 +48,6 @@ app.conf.task_queues = (
 
 # Task 라우팅
 app.conf.task_routes = {
-    # 새로운 Tasks (PRD 구조)
     "tasks.ocr_tasks.process_ocr": {
         "queue": "ocr_queue",
         "exchange": "ocr_exchange",
