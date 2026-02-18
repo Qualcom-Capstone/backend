@@ -2,6 +2,8 @@
 
 > Celery의 gevent pool과 Django ORM을 함께 쓸 때 마주치는 `DatabaseWrapper objects created in a thread can only be used in that same thread` 에러의 원인과 해결.
 
+> **Note (2025-02)**: Alert Worker는 현재도 Celery gevent pool을 사용한다. 따라서 이 문서에서 분석한 OTel + gevent late patching → DB thread-safety 이슈가 **현재도 유효**하며, `OTEL_PYTHON_AUTO_INSTRUMENTATION_EXPERIMENTAL_GEVENT_PATCH=patch_all` 환경변수가 필수다.
+
 ---
 
 ## Situation — 어느 날 Jaeger에서 발견한 에러
@@ -187,7 +189,7 @@ Django가 제공하는 escape hatch. 커넥션의 스레드 검증을 끈다. �
 근본적으로 gevent를 쓰지 않으면 문제 자체가 없다. 하지만 Alert Worker는 FCM 푸시라는 I/O 바운드 작업에 특화되어 있고, prefork의 프로세스 기반 모델은 동시 100개 처리에 메모리 비효율적이다.
 - *Trade-off*: 문제 근본 해결 vs. I/O 집약 워크로드에 부적합
 
-**결론: 방안 A를 채택했다.** 환경변수 한 줄로 근본 원인(late patching)을 제거하며, 애플리케이션 코드 수정이 불필요하다. `MonkeyPatchWarning` 경고도 함께 사라진다.
+**당시 결론: 방안 A를 채택했다.** 환경변수 한 줄로 근본 원인(late patching)을 제거하며, 애플리케이션 코드 수정이 불필요하다. `MonkeyPatchWarning` 경고도 함께 사라진다.
 
 ```mermaid
 quadrantChart
@@ -200,7 +202,7 @@ quadrantChart
     D. prefork 전환: [0.85, 0.9]
 ```
 
-**수정 전:**
+**수정 전 (Celery gevent pool):**
 ```bash
 # scripts/start_alert_worker.sh
 opentelemetry-instrument \
@@ -213,7 +215,7 @@ opentelemetry-instrument \
     --loglevel=${LOG_LEVEL:-info}
 ```
 
-**수정 후:**
+**수정 후 (OTel 환경변수 추가):**
 ```bash
 # scripts/start_alert_worker.sh
 
@@ -231,10 +233,6 @@ opentelemetry-instrument \
 ```
 
 이 환경변수가 `opentelemetry-instrument`에게 "초기화 전에 `gevent.monkey.patch_all()`을 먼저 실행하라"고 지시한다. 패치 순서가 바로잡히면 `threading.local()`이 정상적으로 greenlet-local이 되고, Django의 `validate_thread_sharing()` 검증을 greenlet 간에도 자연스럽게 통과한다.
-
-> **📸 캡처 4**: 수정 전후 비교
-> - `git diff -- scripts/start_alert_worker.sh`
-> - `docker logs speedcam-alert 2>&1 | head -20` — `MonkeyPatchWarning` 사라진 것 확인
 
 ---
 
@@ -254,12 +252,12 @@ opentelemetry-instrument \
 > **📸 캡처 8**: [After] Grafana Logs Explorer
 > - 수정 후 `DatabaseWrapper` 에러 로그 없음 확인
 
-| | Before | After |
+| | Before (env var 없음) | After (env var 적용) |
 |---|---|---|
 | `send_notification` 에러율 | DatabaseWrapper 에러 반복 | 에러 제거 |
 | `MonkeyPatchWarning` | ssl late patching 경고 발생 | 경고 제거 (정상 패치 순서) |
 | DB 커넥션 격리 | greenlet 간 공유 (threading.local 미패치) | greenlet별 독립 (greenlet-local) |
-| OCR Worker 영향 | — | 없음 (prefork pool) |
+| OCR Worker 영향 | 없음 (prefork pool) | 없음 (prefork pool) |
 | 코드 변경 | — | 환경변수 1줄 (애플리케이션 코드 변경 없음) |
 
 ---
