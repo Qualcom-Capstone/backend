@@ -16,7 +16,8 @@ opentelemetry-instrument \
     --pool=gevent \
     --concurrency=${ALERT_CONCURRENCY:-100} \
     --queues=fcm_queue \
-    --hostname=alert@%h
+    --hostname=alert@%h \
+    --loglevel=${LOG_LEVEL:-info}
 ```
 
 문제는 Jaeger 트레이싱을 확인하면서 드러났다. `send_notification` 태스크에서 이런 에러가 반복되고 있었다:
@@ -166,25 +167,19 @@ flowchart TB
 
 원인을 파악했으니 해결 방안을 검토했다. 핵심은 **"어떤 비용을 감수할 것인가"**였다.
 
-**방안 A. 커넥션 소유권 이전 + `db.close_old_connections()`**
+**방안 A. OTel 환경변수로 monkey-patch 순서 교정 (근본 해결)**
 
-태스크 시작 시 모든 DB 커넥션의 `_thread_ident`를 현재 greenlet ID로 갱신한 뒤, stale 커넥션을 닫는다. 소유권을 먼저 이전해야 `close()` 내부의 `validate_thread_sharing()` 검증을 통과할 수 있다. 이후 ORM 호출 시 현재 greenlet에서 새 커넥션이 생성된다.
-- *Trade-off*: 매번 커넥션을 새로 맺는 오버헤드가 발생한다. 하지만 Alert Worker의 태스크는 FCM 전송(네트워크 I/O)이 병목이므로 DB 커넥션 생성 비용(~1ms)은 무시할 수 있는 수준이다.
+OTel Python 1.37.0+에서 제공하는 `OTEL_PYTHON_AUTO_INSTRUMENTATION_EXPERIMENTAL_GEVENT_PATCH=patch_all` 환경변수를 설정하면, `opentelemetry-instrument`가 자체 초기화 전에 `gevent.monkey.patch_all()`을 호출한다. 이렇게 하면 `threading.local()`이 정상적으로 greenlet-local로 패치되어, 각 greenlet이 자기만의 `db.connections`를 갖게 된다. Late patching 자체가 발생하지 않으므로 문제의 근본 원인이 제거된다.
+- *Trade-off*: "experimental" 라벨이 붙어 있지만, 내부적으로는 동일한 `monkey.patch_all()` 호출 — 타이밍만 다를 뿐이다. OTel 릴리스 노트 모니터링 필요.
 
-**방안 B. Celery Signal(`task_prerun`) — 전역 훅**
+**방안 B. 커넥션 소유권 이전 + `db.close_old_connections()` (런타임 워크어라운드)**
 
-```python
-@signals.task_prerun.connect
-def close_db_connections(**kwargs):
-    close_old_connections()
-```
-
-태스크 코드를 수정하지 않아도 되지만, 모든 태스크에 전역으로 적용된다. 문제는 OCR Worker처럼 이 이슈가 없는 워커에도 불필요하게 커넥션을 닫게 된다는 점이다. 그리고 Signal은 암묵적으로 동작하기 때문에 나중에 "왜 커넥션이 자꾸 끊기지?"라는 디버깅 지옥에 빠질 수 있다.
-- *Trade-off*: 코드 수정 없음 vs. 전역 부작용 + 디버깅 난이도
+태스크 시작 시 모든 DB 커넥션의 `_thread_ident`를 현재 greenlet ID로 갱신한 뒤 stale 커넥션을 닫는 방식. 동작하지만 Django의 private API(`_thread_ident`)에 의존하며, Django 업그레이드 시 깨질 수 있다. 또한 100개 greenlet이 cooperative scheduling으로 동작하므로 `close()` 시 socket I/O에서 context switch가 발생할 수 있는 잠재적 race condition이 존재한다.
+- *Trade-off*: 즉시 적용 가능 vs. private API 의존 + Django 버전 종속
 
 **방안 C. `inc_thread_sharing()` — 스레드 공유 허용**
 
-Django가 제공하는 escape hatch. 커넥션의 스레드 검증을 끈다. 에러는 사라지지만, 여러 greenlet이 같은 커넥션을 동시에 사용할 수 있게 되어 race condition 위험이 생긴다. Django 공식 문서도 이 방식을 권장하지 않는다.
+Django가 제공하는 escape hatch. 커넥션의 스레드 검증을 끈다. 에러는 사라지지만, 여러 greenlet이 같은 물리적 DB 커넥션을 동시에 사용할 수 있게 되어 프로토콜 레벨 MySQL 오류와 데이터 정합성 위험이 생긴다.
 - *Trade-off*: 에러 해소 vs. 데이터 정합성 위험
 
 **방안 D. gevent → prefork 전환**
@@ -192,50 +187,54 @@ Django가 제공하는 escape hatch. 커넥션의 스레드 검증을 끈다. �
 근본적으로 gevent를 쓰지 않으면 문제 자체가 없다. 하지만 Alert Worker는 FCM 푸시라는 I/O 바운드 작업에 특화되어 있고, prefork의 프로세스 기반 모델은 동시 100개 처리에 메모리 비효율적이다.
 - *Trade-off*: 문제 근본 해결 vs. I/O 집약 워크로드에 부적합
 
-**결론: 방안 A를 채택했다.** 코드 변경이 한 줄이고, 영향 범위가 해당 태스크로 한정되며, 커넥션 재생성 비용은 FCM 네트워크 I/O 대비 무시할 수 있다.
+**결론: 방안 A를 채택했다.** 환경변수 한 줄로 근본 원인(late patching)을 제거하며, 애플리케이션 코드 수정이 불필요하다. `MonkeyPatchWarning` 경고도 함께 사라진다.
 
 ```mermaid
 quadrantChart
     title 해결 방안 Trade-off 비교
     x-axis 낮은 침습성 --> 높은 침습성
     y-axis 낮은 안정성 --> 높은 안정성
-    A. close_old_connections: [0.25, 0.78]
-    B. Celery Signal: [0.2, 0.6]
+    A. OTel gevent patch: [0.1, 0.9]
+    B. _thread_ident 워크어라운드: [0.3, 0.65]
     C. inc_thread_sharing: [0.35, 0.2]
     D. prefork 전환: [0.85, 0.9]
 ```
 
 **수정 전:**
-```python
-@shared_task(bind=True, max_retries=3, autoretry_for=(Exception,), ...)
-def send_notification(self, detection_id: int):
-    from apps.detections.models import Detection
-    # ...
-    detection = Detection.objects.using("detections_db").get(...)  # 💥
+```bash
+# scripts/start_alert_worker.sh
+opentelemetry-instrument \
+    --service_name speedcam-alert \
+    celery -A config worker \
+    --pool=gevent \
+    --concurrency=${ALERT_CONCURRENCY:-100} \
+    --queues=fcm_queue \
+    --hostname=alert@%h \
+    --loglevel=${LOG_LEVEL:-info}
 ```
 
 **수정 후:**
-```python
-import _thread
-from django import db
+```bash
+# scripts/start_alert_worker.sh
 
-@shared_task(bind=True, max_retries=3, autoretry_for=(Exception,), ...)
-def send_notification(self, detection_id: int):
-    # 현재 greenlet으로 커넥션 소유권 이전 → stale 커넥션 정리
-    current_ident = _thread.get_ident()
-    for conn in db.connections.all():
-        conn._thread_ident = current_ident
-    db.close_old_connections()
+# gevent monkey-patching을 OTel 초기화 전에 수행하도록 설정
+export OTEL_PYTHON_AUTO_INSTRUMENTATION_EXPERIMENTAL_GEVENT_PATCH=patch_all
 
-    from apps.detections.models import Detection
-    # ...
-    detection = Detection.objects.using("detections_db").get(...)  # ✅
+opentelemetry-instrument \
+    --service_name speedcam-alert \
+    celery -A config worker \
+    --pool=gevent \
+    --concurrency=${ALERT_CONCURRENCY:-100} \
+    --queues=fcm_queue \
+    --hostname=alert@%h \
+    --loglevel=${LOG_LEVEL:-info}
 ```
 
-단순히 `close_old_connections()`만 호출하면 `close()` 내부에서도 `validate_thread_sharing()`이 실행되어 같은 에러가 발생한다. 커넥션의 `_thread_ident`를 현재 greenlet ID로 먼저 갱신해야 정리가 가능하다. 이후 ORM 호출 시 현재 greenlet에서 새 커넥션이 생성되므로 `_thread_ident`가 자연스럽게 일치한다.
+이 환경변수가 `opentelemetry-instrument`에게 "초기화 전에 `gevent.monkey.patch_all()`을 먼저 실행하라"고 지시한다. 패치 순서가 바로잡히면 `threading.local()`이 정상적으로 greenlet-local이 되고, Django의 `validate_thread_sharing()` 검증을 greenlet 간에도 자연스럽게 통과한다.
 
-> **📸 캡처 4**: 수정 코드 diff
-> - `git diff -- tasks/notification_tasks.py`
+> **📸 캡처 4**: 수정 전후 비교
+> - `git diff -- scripts/start_alert_worker.sh`
+> - `docker logs speedcam-alert 2>&1 | head -20` — `MonkeyPatchWarning` 사라진 것 확인
 
 ---
 
@@ -258,9 +257,10 @@ def send_notification(self, detection_id: int):
 | | Before | After |
 |---|---|---|
 | `send_notification` 에러율 | DatabaseWrapper 에러 반복 | 에러 제거 |
-| DB 커넥션 패턴 | stale 커넥션 재사용 → 실패 | 태스크 시작 시 정리 → 새 커넥션 |
+| `MonkeyPatchWarning` | ssl late patching 경고 발생 | 경고 제거 (정상 패치 순서) |
+| DB 커넥션 격리 | greenlet 간 공유 (threading.local 미패치) | greenlet별 독립 (greenlet-local) |
 | OCR Worker 영향 | — | 없음 (prefork pool) |
-| 성능 오버헤드 | — | 미미 (DB alias 4개 순회) |
+| 코드 변경 | — | 환경변수 1줄 (애플리케이션 코드 변경 없음) |
 
 ---
 
@@ -271,6 +271,7 @@ def send_notification(self, detection_id: int):
 - [Django Databases — Persistent connections and thread safety](https://docs.djangoproject.com/en/5.1/ref/databases/#persistent-database-connections)
 - [Celery — Concurrency with Gevent](https://docs.celeryq.dev/en/stable/userguide/concurrency/gevent.html)
 - [Gevent — Monkey Patching](http://www.gevent.org/api/gevent.monkey.html)
+- [OpenTelemetry Python — Agent Configuration (gevent patch)](https://opentelemetry.io/docs/zero-code/python/configuration/)
 
 ### GitHub Issues
 
