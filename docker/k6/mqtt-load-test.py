@@ -582,7 +582,8 @@ class MQTTLoadTest:
         print(f"    {'E2E 완료 시간':<21} {hypothesis.get('completion_time', '-'):<20} {actual_e2e:<15}")
         print(f"    {'OCR 큐 피크':<22} {hypothesis.get('peak_ocr_queue', '-'):<20} {actual_ocr_peak:<15}")
         print(f"    {'DLQ 메시지':<23} {hypothesis.get('dlq_messages', '-'):<20} {actual_dlq:<15}")
-        print(f"    {'알림 생성 수':<22} {'≈ 완료 수':<20} {str(pipeline_result.get('notification_count', '-')) if pipeline_result else '-':<15}")
+        notif = str(pipeline_result.get('notification_count', '-')) if pipeline_result else '-'
+        print(f"    {'알림 생성 수':<22} {'≈ 완료 수':<20} {notif:<15}")
         print(f"    {'예상 병목':<23} {hypothesis.get('bottleneck', '-')}")
 
         print("\n  [병목 분석]")
@@ -599,7 +600,7 @@ class MQTTLoadTest:
 # 시그널 핸들러 (graceful shutdown)
 # ============================================================
 def signal_handler(signum, frame):
-    print(f"\n  [종료 신호 수신] 워커 중단 중...")
+    print("\n  [종료 신호 수신] 워커 중단 중...")
     shutdown_event.set()
 
 
