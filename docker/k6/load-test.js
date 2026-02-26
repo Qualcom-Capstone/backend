@@ -4,12 +4,75 @@ import { Rate, Trend, Counter } from 'k6/metrics';
 import exec from 'k6/execution';
 
 // ============================================================
-// SpeedCam 부하테스트 - 실제 사용 패턴 기반
+// SpeedCam v2 부하테스트 - Event Driven Architecture (비동기 OCR)
 // ============================================================
-// 인프라: 6x GCP e2-small (2 vCPU, 2 GB RAM)
+// 인프라: 8x GCP 인스턴스 (기존 6 + OCR Worker 2대 추가)
+//   - speedcam-app (10.178.0.4): Django + Gunicorn + MQTT Subscriber (e2-small)
+//   - speedcam-db (10.178.0.2): MySQL 8.0 (e2-medium)
+//   - speedcam-mq (10.178.0.7): RabbitMQ MQTT + AMQP (e2-small)
+//   - speedcam-ocr (10.178.0.3): Celery OCR Worker (e2-small, concurrency=1)
+//   - speedcam-ocr-2 (10.178.0.11): Celery OCR Worker (e2-medium, concurrency=2) [신규]
+//   - speedcam-ocr-3 (10.178.0.10): Celery OCR Worker (e2-medium, concurrency=2) [신규]
+//   - speedcam-alert (10.178.0.6): Kombu Consumer + Celery gevent Worker (e2-small)
+//   - speedcam-mon (10.178.0.5): Prometheus + Grafana + Loki + Jaeger (e2-small)
 // HTTP 처리: Gunicorn 2 workers × 2 threads = 4 동시 핸들러
-// 가설 기반 임계치 (load-test-plan.md 참조)
+// ★ v2 핵심 특징: OCR이 별도 Worker(speedcam-ocr)에서 비동기 처리
+//   - HTTP API는 OCR 부하와 무관하게 동작
+//   - OCR 파이프라인 테스트는 mqtt-load-test.py 참조
+// Prometheus Remote Write: K6_PROMETHEUS_RW_SERVER_URL=http://10.178.0.5:9090/api/v1/write
+//   NOTE: v2 Prometheus는 speedcam-mon(10.178.0.5)에 위치.
+//         v1 Prometheus(10.178.0.9)와는 별도 인스턴스입니다.
+// Output flag: --out experimental-prometheus-rw
 // ============================================================
+//
+// ★ v1과의 핵심 차이 (비교 분석용):
+//   v1: POST /api/v1/crud/cars → 동기 OCR 실행 → HTTP 스레드 3~10초 점유
+//       → OCR 부하가 모든 HTTP 요청의 응답시간에 직접 영향
+//   v2: OCR이 별도 Worker(speedcam-ocr)에서 비동기 처리
+//       → HTTP API는 OCR 부하와 완전히 분리
+//       → 이 스크립트의 결과는 "OCR 영향 없는 순수 HTTP 성능"
+//   비교 시: v1 동일 시나리오 결과와 비교하면 OCR 분리 효과를 정량화 가능
+//
+// ============================================================
+// 실행 방법
+// ============================================================
+// 1. Prometheus Remote Write 포함 (Grafana 연동):
+//    K6_PROMETHEUS_RW_SERVER_URL=http://10.178.0.5:9090/api/v1/write \
+//      k6 run --out experimental-prometheus-rw \
+//      --env MAIN_SERVICE_URL=http://localhost \
+//      --env TEST_ID=v2-baseline-$(date +%s) \
+//      load-test.js
+//
+// 2. 콘솔 출력만:
+//    k6 run \
+//      --env MAIN_SERVICE_URL=http://localhost \
+//      --env TEST_ID=v2-baseline-$(date +%s) \
+//      load-test.js
+//
+// 실행 위치: speedcam-app 인스턴스 (10.178.0.4 / 34.64.41.106)
+// NOTE: MAIN_SERVICE_URL=http://localhost 는 Traefik(port 80)을 통해
+//       Django에 접근합니다. 직접 Django 포트(8000)가 아닌 리버스 프록시 경유.
+// ============================================================
+
+// ============================================================
+// [v2 <-> v1 메트릭 매핑] (비교 분석용)
+// ============================================================
+// v2: dashboard_req_duration   <->  v1: dashboard_req_duration  (대시보드 응답시간, 공통)
+// v2: detections_list_duration <->  v1: cars_list_duration      (목록 조회)
+// v2: statistics_req_duration  <->  v1: N/A                     (v2 전용, v1에 대응 없음)
+// v2: pending_read_duration    <->  v1: unchecked_req_duration  (미처리 목록)
+// v2: admin_req_duration       <->  v1: N/A                     (v2 전용, v1은 동기 OCR POST)
+// v2: stress_read_duration     <->  v1: stress_read_duration    (스트레스 읽기, 공통)
+// v2: stress_write_duration    <->  v1: stress_write_duration   (스트레스 쓰기, 공통 이름이나 내용 상이)
+//     ★ v2 stress_write = 차량 등록 POST (<300ms), v1 stress_write = 동기 OCR POST (3~10초/건)
+//     → 이 차이 자체가 핵심 비교 포인트: v1은 20% OCR POST가 전체 시스템을 무너뜨리지만,
+//       v2는 OCR과 무관하므로 안정적
+// v2: errors                   <->  v1: errors                  (에러율, 공통)
+// v2: total_requests           <->  v1: total_requests          (요청 수, 공통)
+// ============================================================
+
+// 테스트 실행 ID — Grafana에서 테스트별 필터링 가능
+const TEST_ID = __ENV.TEST_ID || `v2-${Date.now()}`;
 
 // -- 커스텀 메트릭 --
 const dashboardLatency = new Trend('dashboard_req_duration', true);
@@ -19,6 +82,8 @@ const pendingLatency = new Trend('pending_read_duration', true);
 const adminLatency = new Trend('admin_req_duration', true);
 const errorRate = new Rate('errors');
 const requestCount = new Counter('total_requests');
+const stressReadLatency  = new Trend('stress_read_duration', true);
+const stressWriteLatency = new Trend('stress_write_duration', true);
 
 const BASE_URL = __ENV.MAIN_SERVICE_URL || 'http://main:8000';
 
@@ -75,6 +140,9 @@ export function setup() {
   }
 
   console.log(`[Setup] ${vehicles.length}대 테스트 차량 생성 완료`);
+  console.log(`[Setup] TEST_ID: ${TEST_ID}`);
+  console.log(`[Setup] 인프라: 8x 인스턴스 (OCR 3대 concurrency=5), Gunicorn 2w×2t = 4 핸들러`);
+  console.log(`[Setup] ★ v2 비동기 OCR — HTTP API는 OCR 부하와 무관`);
   return { vehicles };
 }
 
@@ -85,6 +153,14 @@ export function setup() {
 // 모든 임계치는 load-test-plan.md의 가설에서 도출
 // ============================================================
 export const options = {
+  tags: { test_id: TEST_ID },
+  // 타임라인 (총 약 12분 10초):
+  //   0m     ~ 2m     : 시나리오 A (대시보드 폴링)
+  //   0m     ~ 2m     : 시나리오 B (관리자 작업, A와 동시)
+  //   2m     ~ 4m30s  : 시나리오 C (혼합 워크로드)
+  //   4m30s  ~ 5m40s  : 시나리오 D (스파이크)
+  //   5m40s  ~ 9m10s  : 시나리오 E (스트레스 - 읽기, 50 VUs)
+  //   9m10s  ~ 12m10s : 시나리오 F (스트레스 - 혼합, 50 VUs)
   scenarios: {
     // 시나리오 A: 대시보드 폴링 (주요 읽기 부하)
     // 사용자가 대시보드를 열어두고 주기적으로 데이터 확인
@@ -147,6 +223,53 @@ export const options = {
       exec: 'spikeResilience',
       tags: { scenario: 'spike_resilience' },
     },
+
+    // ----------------------------------------------------------
+    // 시나리오 E: 스트레스 - 읽기 전용 (한계점 탐색)
+    // ----------------------------------------------------------
+    // 50 VU → 4 핸들러 = 12.5배 초과 구독
+    // v2 핵심: OCR이 분리되어 있으므로 핸들러 전부 읽기에 가용
+    // v1 대비: v1은 OCR 잔류 부하로 가용 핸들러가 더 적을 수 있음
+    // 가설: p95 < 5000ms, < 20% 에러
+    // ----------------------------------------------------------
+    stress_ramp: {
+      executor: 'ramping-vus',
+      startVUs: 0,
+      stages: [
+        { duration: '30s', target: 10 },
+        { duration: '30s', target: 30 },
+        { duration: '1m',  target: 50 },
+        { duration: '30s', target: 30 },
+        { duration: '1m',  target: 0  },
+      ],
+      startTime: '5m40s',
+      gracefulStop: '30s',
+      exec: 'stressRampV2',
+      tags: { scenario: 'stress_ramp' },
+    },
+
+    // ----------------------------------------------------------
+    // 시나리오 F: 스트레스 - 혼합 (80% 읽기 + 20% 차량 등록)
+    // ----------------------------------------------------------
+    // ★ v1 비교 핵심: v1은 20% 동기 OCR POST (3~10초/건) → 시스템 붕괴
+    //    v2는 20% 차량 등록 POST (<300ms) → OCR과 무관 → 안정
+    // 동일 50 VUs, 동일 80/20 비율에서 시스템 안정성 차이 측정
+    // 가설: p95 < 30000ms, < 30% 에러
+    // ----------------------------------------------------------
+    stress_mixed: {
+      executor: 'ramping-vus',
+      startVUs: 0,
+      stages: [
+        { duration: '30s', target: 10 },
+        { duration: '30s', target: 30 },
+        { duration: '1m',  target: 50 },
+        { duration: '1m',  target: 0  },
+      ],
+      startTime: '9m10s',
+      gracefulStop: '30s',
+      exec: 'stressMixedV2',
+      tags: { scenario: 'stress_mixed' },
+    },
   },
 
   // 임계치: 4 핸들러 기준으로 보정 (GUNICORN_WORKERS=2)
@@ -160,6 +283,13 @@ export const options = {
     'errors': ['rate<0.05'],                      // 전체 에러율: 5% 미만
     'errors{scenario:dashboard_polling}': ['rate<0.01'],  // 대시보드: 1% 미만
     'errors{scenario:spike_resilience}': ['rate<0.10'],   // 스파이크: 10% 미만
+    // 스트레스 읽기: 50 VUs → 큐잉 심각, 5초 허용
+    'stress_read_duration': ['p(95)<5000'],
+    // 스트레스 혼합 쓰기(차량등록): 50 VUs에서도 빠른 응답 예상 (OCR 없음)
+    'stress_write_duration': ['p(95)<30000'],
+    // 스트레스 에러율
+    'errors{scenario:stress_ramp}': ['rate<0.20'],
+    'errors{scenario:stress_mixed}': ['rate<0.30'],
   },
 };
 
@@ -365,6 +495,96 @@ export function spikeResilience() {
 }
 
 // ============================================================
+// 시나리오 E: 스트레스 - 읽기 전용 (한계점 탐색)
+// ============================================================
+// 50 VU → v2 엔드포인트 (detections, notifications, statistics)
+// v1과 동일 VU 프로파일 → 핸들러 포화 시점 비교
+// v2는 OCR 분리로 순수 읽기 성능만 측정
+// ============================================================
+export function stressRampV2() {
+  group('스트레스 - 읽기', () => {
+    const endpoints = [
+      '/api/v1/detections/',
+      '/api/v1/notifications/',
+      '/api/v1/detections/statistics/',
+    ];
+    const endpoint = endpoints[Math.floor(Math.random() * endpoints.length)];
+    const res = http.get(`${BASE_URL}${endpoint}`, {
+      tags: { endpoint: 'stress_read' },
+    });
+    check(res, {
+      '스트레스 읽기 200': (r) => r.status === 200,
+    });
+    errorRate.add(res.status !== 200);
+    stressReadLatency.add(res.timings.duration);
+    requestCount.add(1);
+  });
+
+  sleep(1); // 빠른 요청 (1초 간격)
+}
+
+// ============================================================
+// 시나리오 F: 스트레스 - 혼합 (80% 읽기 + 20% 차량 등록)
+// ============================================================
+// ★ 핵심 비교 시나리오:
+//   v1: 20% 동기 OCR POST (3~10초/건) → 핸들러 점유 → 시스템 붕괴
+//   v2: 20% 차량 등록 POST (<300ms) → 핸들러 즉시 반환 → 안정
+// 동일 50 VUs, 동일 80/20 비율에서 시스템 안정성 차이를 측정
+// ============================================================
+export function stressMixedV2() {
+  if (Math.random() < 0.8) {
+    // 80%: 읽기 - v2 엔드포인트
+    group('스트레스 혼합 - 읽기', () => {
+      const endpoints = [
+        '/api/v1/detections/',
+        '/api/v1/notifications/',
+        '/api/v1/detections/statistics/',
+      ];
+      const endpoint = endpoints[Math.floor(Math.random() * endpoints.length)];
+      const res = http.get(`${BASE_URL}${endpoint}`, {
+        tags: { endpoint: 'stress_mixed_read' },
+      });
+      check(res, {
+        '스트레스 혼합 읽기 200': (r) => r.status === 200,
+      });
+      errorRate.add(res.status !== 200);
+      stressReadLatency.add(res.timings.duration);
+      requestCount.add(1);
+    });
+
+    sleep(1);
+  } else {
+    // 20%: 차량 등록 쓰기 (v2에는 동기 OCR 없음 → POST /vehicles)
+    // ★ 비교 주의: v1 쓰기 사이클 = sleep(3) + OCR(3~10초) = 6~13초/건
+    //              v2 쓰기 사이클 = sleep(3) + POST(<300ms) = ~3.3초/건
+    //   → 동일 50 VUs에서 v2가 v1보다 약 2~4배 더 많은 쓰기 요청 발생
+    //   → v2 응답시간이 짧은 것은 "OCR 분리" 효과이지 "요청 수가 적어서"가 아님
+    group('스트레스 혼합 - 차량 등록', () => {
+      const plate = randomPlate();
+      const payload = JSON.stringify({
+        plate_number: plate,
+        owner_name: `스트레스테스트_${Date.now()}`,
+        owner_phone: `010-${Math.floor(Math.random() * 9000) + 1000}-${Math.floor(Math.random() * 9000) + 1000}`,
+      });
+
+      const res = http.post(`${BASE_URL}/api/v1/vehicles/`, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        tags: { endpoint: 'stress_mixed_write' },
+      });
+      const ok = res.status === 201;
+      check(res, {
+        '스트레스 혼합 차량 등록 성공': () => ok,
+      });
+      errorRate.add(!ok);
+      stressWriteLatency.add(res.timings.duration);
+      requestCount.add(1);
+    });
+
+    sleep(3);
+  }
+}
+
+// ============================================================
 // teardown: 테스트 데이터 정리 (선택적)
 // ============================================================
 export function teardown(data) {
@@ -376,4 +596,13 @@ export function teardown(data) {
     }
     console.log(`[Teardown] ${deleted}/${data.vehicles.length}대 테스트 차량 삭제 완료`);
   }
+  console.log(`[Teardown] v2 부하테스트 완료 (TEST_ID: ${TEST_ID})`);
+  console.log('[Teardown] 주요 측정 포인트:');
+  console.log('  - dashboard_req_duration: 대시보드 읽기 응답 시간 (목표: p95 < 200ms)');
+  console.log('  - detections_list_duration: 감지 목록 응답 시간 (목표: p95 < 300ms)');
+  console.log('  - stress_read_duration: 스트레스 읽기 응답 시간 (목표: p95 < 5000ms)');
+  console.log('  - stress_write_duration: 스트레스 쓰기(차량등록) 응답 시간 (목표: p95 < 30000ms)');
+  console.log('  - errors{scenario:stress_ramp}: 스트레스 읽기 에러율 (목표: < 20%)');
+  console.log('  - errors{scenario:stress_mixed}: 스트레스 혼합 에러율 (목표: < 30%)');
+  console.log(`[Teardown] Grafana: http://10.178.0.5:3000 → k6 dashboard 확인`);
 }

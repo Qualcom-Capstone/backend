@@ -5,12 +5,21 @@ MQTT 파이프라인 부하테스트 - IoT 카메라 시뮬레이션
 실제 사용 패턴 기반 시나리오:
   - normal: 정상 운영 (20대 카메라, 1건/분)
   - rush_hour: 러시아워 (20대 카메라, 5건/분)
-  - burst: 버스트 스톰 (20대 카메라, 1건/초)
+  - burst: 버스트 스톰 (10대 카메라, 1건/초)
 
 파이프라인 검증:
   MQTT 발행 → Detection(pending) → OCR Worker → Alert Worker → 완료
 
-인프라 기준: 6x GCP e2-small (2 vCPU, 2 GB RAM)
+인프라 기준: 8x GCP 인스턴스 (OCR Worker 3대 확장)
+  - speedcam-app (e2-small): Django + Gunicorn + MQTT Subscriber
+  - speedcam-db (e2-medium): MySQL 8.0
+  - speedcam-mq (e2-small): RabbitMQ (MQTT + AMQP)
+  - speedcam-ocr (e2-small): Celery OCR Worker (concurrency=1)
+  - speedcam-ocr-2 (e2-medium): Celery OCR Worker (concurrency=2)
+  - speedcam-ocr-3 (e2-medium): Celery OCR Worker (concurrency=2)
+  - speedcam-alert (e2-small): Kombu Consumer + Celery gevent Worker
+  - speedcam-mon (e2-small): Prometheus + Grafana + Loki + Jaeger
+  총 OCR 동시 처리: 5 (1 + 2 + 2)
 가설 기반 검증 (load-test-plan.md 참조)
 """
 
@@ -65,24 +74,24 @@ SCENARIOS = {
             'publish_success': '100%',
             'completion_rate': '95%+ (120초 이내)',
             'completion_time': '120초 이내',
-            'peak_ocr_queue': '< 50',
+            'peak_ocr_queue': '< 10 (mock) / < 30 (실제 EasyOCR)',
             'dlq_messages': '0',
             'bottleneck': 'OCR worker (mock 느린 경우)',
         },
     },
     'burst': {
-        'description': '버스트 스톰: 20대 카메라, 1건/초 (20 msg/s)',
-        'workers': 20,
+        'description': '버스트 스톰: 10대 카메라, 1건/초 (10 msg/s)',
+        'workers': 10,
         'rate_per_worker': 1.0,  # 초당 1건
         'duration': 60,
-        'expected_total': 1200,
+        'expected_total': 600,
         'hypothesis': {
             'publish_success': '100%',
-            'completion_rate': '100% (드레인 후)',
+            'completion_rate': '100% (300초 이내)',
             'completion_time': '300초 이내',
-            'peak_ocr_queue': '200-500',
+            'peak_ocr_queue': '< 500 (실제 EasyOCR 기준)',
             'dlq_messages': '0',
-            'bottleneck': 'MQTT Subscriber (단일 스레드) → OCR 큐 깊이',
+            'bottleneck': 'OCR Worker 처리 속도 (실제 EasyOCR 기준, concurrency=5)',
         },
     },
 }
@@ -166,6 +175,21 @@ class PipelineVerifier:
             print(f"  [검증] 큐 깊이 조회 실패: {e}")
             return {}
 
+    def get_notification_count(self):
+        """GET /api/v1/notifications/ - 알림 카운트로 Alert Worker 동작 간접 검증"""
+        if not self.available:
+            return None
+        try:
+            resp = requests.get(
+                f"{self.api_base_url}/api/v1/notifications/",
+                timeout=10
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get('count', len(data.get('results', [])))
+        except Exception:
+            return None
+
     def wait_for_completion(self, expected_count, baseline_stats,
                             timeout=300, poll_interval=5):
         """파이프라인 완료 대기 - /api/v1/detections/statistics/ 폴링
@@ -177,6 +201,7 @@ class PipelineVerifier:
 
         baseline_completed = baseline_stats.get('completed_count', 0)
         baseline_failed = baseline_stats.get('failed_count', 0)
+        baseline_notifications = self.get_notification_count() or 0
 
         start_time = time.time()
         last_print = 0
@@ -206,12 +231,15 @@ class PipelineVerifier:
 
             elapsed = time.time() - start_time
             if elapsed - last_print >= 10:
+                notif_count = (self.get_notification_count() or 0) - baseline_notifications
                 print(f"  [{elapsed:.0f}s] 완료: {new_completed} | 실패: {new_failed} | "
-                      f"대기: {new_pending} | OCR큐: {ocr_depth} | FCM큐: {fcm_depth}")
+                      f"대기: {new_pending} | OCR큐: {ocr_depth} | FCM큐: {fcm_depth} | "
+                      f"알림: {notif_count}")
                 last_print = elapsed
 
             if new_done >= expected_count:
                 completion_time = time.time() - start_time
+                final_notif = (self.get_notification_count() or 0) - baseline_notifications
                 return {
                     'completed': new_completed,
                     'failed': new_failed,
@@ -220,6 +248,7 @@ class PipelineVerifier:
                     'peak_ocr_queue': self.peak_ocr_queue,
                     'peak_fcm_queue': self.peak_fcm_queue,
                     'dlq_messages': queue_depth.get('dlq_queue', 0),
+                    'notification_count': final_notif,
                 }
 
             time.sleep(poll_interval)
@@ -229,6 +258,7 @@ class PipelineVerifier:
         final_completed = (current.get('completed_count', 0) - baseline_completed) if current else 0
         final_failed = (current.get('failed_count', 0) - baseline_failed) if current else 0
 
+        final_notif = (self.get_notification_count() or 0) - baseline_notifications
         return {
             'completed': final_completed,
             'failed': final_failed,
@@ -237,6 +267,7 @@ class PipelineVerifier:
             'peak_ocr_queue': self.peak_ocr_queue,
             'peak_fcm_queue': self.peak_fcm_queue,
             'dlq_messages': self.get_queue_depth().get('dlq_queue', 0),
+            'notification_count': final_notif,
             'timed_out': True,
         }
 
@@ -248,6 +279,25 @@ GCS_BUCKET = os.getenv('GCS_BUCKET', 'speedcam-bucket-4f918446')
 REAL_IMAGES = [f"real-plate-{str(i).zfill(2)}.jpg" for i in range(1, 11)]
 _image_counter = 0
 _image_lock = threading.Lock()
+
+
+def verify_gcs_images():
+    """GCS 이미지 파일 존재 여부 사전 확인"""
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET)
+        blob = bucket.blob(f"detections/{REAL_IMAGES[0]}")
+        if blob.exists():
+            print(f"  [사전확인] GCS 이미지 접근 가능: gs://{GCS_BUCKET}/detections/{REAL_IMAGES[0]}")
+            return True
+        else:
+            print(f"  [경고] GCS 이미지 없음: gs://{GCS_BUCKET}/detections/{REAL_IMAGES[0]}")
+            print("  [경고] OCR Worker가 이미지를 찾지 못해 failed 상태가 될 수 있습니다")
+            return False
+    except Exception as e:
+        print(f"  [경고] GCS 접근 확인 실패: {e} (테스트는 계속 진행됩니다)")
+        return False
 
 
 def generate_message(camera_id=None):
@@ -412,6 +462,9 @@ class MQTTLoadTest:
         print(f"  파이프라인 검증: {'활성' if self.verifier else '비활성'}")
         print("=" * 70)
 
+        # Phase 0: GCS 이미지 사전 확인
+        verify_gcs_images()
+
         # Phase 1: 기준선 기록
         baseline = None
         if self.verifier:
@@ -502,6 +555,7 @@ class MQTTLoadTest:
             print(f"    OCR 큐 피크: {pipeline_result['peak_ocr_queue']}")
             print(f"    FCM 큐 피크: {pipeline_result['peak_fcm_queue']}")
             print(f"    DLQ 메시지: {pipeline_result.get('dlq_messages', '-')}")
+            print(f"    알림 생성: {pipeline_result.get('notification_count', '-')}")
         else:
             print("\n  [파이프라인 검증] 비활성 (API URL 미설정 또는 requests 패키지 없음)")
 
@@ -528,6 +582,7 @@ class MQTTLoadTest:
         print(f"    {'E2E 완료 시간':<21} {hypothesis.get('completion_time', '-'):<20} {actual_e2e:<15}")
         print(f"    {'OCR 큐 피크':<22} {hypothesis.get('peak_ocr_queue', '-'):<20} {actual_ocr_peak:<15}")
         print(f"    {'DLQ 메시지':<23} {hypothesis.get('dlq_messages', '-'):<20} {actual_dlq:<15}")
+        print(f"    {'알림 생성 수':<22} {'≈ 완료 수':<20} {str(pipeline_result.get('notification_count', '-')) if pipeline_result else '-':<15}")
         print(f"    {'예상 병목':<23} {hypothesis.get('bottleneck', '-')}")
 
         print("\n  [병목 분석]")
