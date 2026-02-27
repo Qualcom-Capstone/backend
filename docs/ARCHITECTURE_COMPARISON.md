@@ -233,17 +233,19 @@ OCR 처리를 Django에서 분리하여 전용 Worker가 이벤트를 구독하�
 sequenceDiagram
     participant E1 as Edge Device 1
     participant E2 as Edge Device 2
-    participant M as main (Django)
     participant Q as RabbitMQ
+    participant M as main (Django)
     participant O as ocr-worker
 
-    E1->>M: MQTT (과속 감지)
-    M->>Q: 감지 이벤트 발행
-    M-->>E1: ACK (즉시)
+    E1->>Q: MQTT Publish (과속 감지)
+    Q-->>E1: PUBACK (즉시)
+    Q->>M: 메시지 전달 (subscribe)
+    M->>Q: 감지 이벤트 발행 (AMQP)
 
-    E2->>M: MQTT (과속 감지)
-    M->>Q: 감지 이벤트 발행
-    M-->>E2: ACK (즉시)
+    E2->>Q: MQTT Publish (과속 감지)
+    Q-->>E2: PUBACK (즉시)
+    Q->>M: 메시지 전달 (subscribe)
+    M->>Q: 감지 이벤트 발행 (AMQP)
 
     Q->>O: 이벤트 1 수신
     Q->>O: 이벤트 2 수신
@@ -274,14 +276,15 @@ sequenceDiagram
     participant Q as RabbitMQ
 
     Camera->>Pi: 과속 차량 #1 감지
-    Pi->>M: MQTT Publish
-    M->>Q: 이벤트 발행
-    M-->>Pi: ACK (즉시)
+    Pi->>Q: MQTT Publish
+    Q-->>Pi: PUBACK (즉시)
     Note over Pi: ✅ 즉시 복귀
+    Q->>M: 메시지 전달 (subscribe)
+    M->>Q: 이벤트 발행 (AMQP)
 
     Camera->>Pi: 과속 차량 #2 감지
-    Pi->>M: MQTT Publish
-    M-->>Pi: ACK (즉시)
+    Pi->>Q: MQTT Publish
+    Q-->>Pi: PUBACK (즉시)
     Note over Pi: ✅ 연속 감지 가능
 ```
 
@@ -403,16 +406,17 @@ docker-compose up -d --scale ocr-worker=3
 ```mermaid
 sequenceDiagram
     participant Edge as Edge Device
-    participant Main as main
     participant RMQ as RabbitMQ
+    participant Main as main
     participant OCR as ocr-worker
     participant Alert as alert-worker
     participant User as 사용자 앱
 
-    Edge->>Main: MQTT (과속 차량 감지)
+    Edge->>RMQ: MQTT Publish (과속 차량 감지)
+    RMQ-->>Edge: PUBACK (즉시)
+    RMQ->>Main: 메시지 전달 (subscribe)
     Main->>Main: DB 저장 (pending)
-    Main->>RMQ: 과속 감지 이벤트 발행
-    Main-->>Edge: ACK
+    Main->>RMQ: 감지 이벤트 발행 (AMQP)
 
     RMQ->>OCR: 감지 이벤트 수신
     OCR->>OCR: 번호판 OCR 처리
