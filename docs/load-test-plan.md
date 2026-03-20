@@ -1,5 +1,55 @@
 # SpeedCam 부하 테스트 계획서
 
+## 0. v1 vs v2 비교 테스트 전략
+
+### 비교 목적
+
+v1(모놀리식 동기 OCR) → v2(Event Driven Architecture) 아키텍처 전환의 성능 개선 효과를 **정량적으로 입증**하기 위해, 동일한 시나리오 구조로 양측을 테스트합니다.
+
+### 비교 가능한 시나리오 매핑
+
+| 비교 항목 | v1 시나리오 | v2 시나리오 | 비교 가능 | 비고 |
+|----------|-----------|-----------|----------|------|
+| 순수 읽기 (대시보드) | A: dashboard_polling (3 VUs) | A: dashboard_polling (3 VUs) | Yes | 동일 구조 |
+| 혼합 워크로드 | C: mixed_workload (0→9 VUs) | C: mixed_workload (0→9 VUs) | Yes | 읽기/쓰기 비율 유사 |
+| 스파이크 내성 | D: spike (0→15 VUs) | D: spike_resilience (0→15 VUs) | Yes | 동일 VU 프로파일 |
+| 스트레스 읽기 | E: stress_ramp (0→50 VUs) | E: stress_ramp (0→50 VUs) | Yes | 동일 VU 프로파일 |
+| 스트레스 혼합 | F: stress_mixed (0→50 VUs) | F: stress_mixed (0→50 VUs) | Yes | **쓰기 내용 상이*** |
+| 동기 OCR 부하 | B: sync_ocr_stress (2 VUs) | N/A | No | v2는 MQTT 파이프라인으로 분리 |
+| MQTT 파이프라인 | N/A | MQTT 3 시나리오 | No | v1에는 MQTT 없음 |
+
+> *v1 stress_mixed 20% 쓰기 = **동기 OCR POST** (3~10초/건, HTTP 스레드 점유)
+> v2 stress_mixed 20% 쓰기 = **차량 등록 POST** (<300ms, OCR과 무관)
+> → **이 차이 자체가 핵심 비교 포인트: OCR 분리 효과**
+
+### 비교 불가능한 영역
+
+- **v1 sync_ocr_stress** vs **v2 admin_ops**: v1은 OCR이 HTTP 동기 처리, v2는 OCR이 별도 Worker에서 비동기 처리. 구조적으로 다른 테스트.
+- **v2 MQTT 파이프라인**: v1에는 MQTT가 없으므로 직접 비교 불가. v2 전용 성능 지표.
+
+### 핵심 비교 메트릭 매핑
+
+| v1 메트릭 | v2 메트릭 | 의미 | 비고 |
+|----------|----------|------|------|
+| dashboard_req_duration | dashboard_req_duration | 대시보드 응답시간 | 공통 |
+| cars_list_duration | detections_list_duration | 목록 조회 | 엔드포인트명 상이 |
+| unchecked_req_duration | pending_read_duration | 미처리 목록 | 엔드포인트명 상이 |
+| ocr_req_duration | N/A | 동기 OCR | v2는 MQTT 파이프라인 |
+| N/A | statistics_req_duration | 통계 조회 | v2 전용 |
+| stress_read_duration | stress_read_duration | 스트레스 읽기 | 공통 |
+| stress_write_duration | stress_write_duration | 스트레스 쓰기 | **v1=OCR, v2=차량등록** |
+| errors | errors | 에러율 | 공통 |
+| total_requests | total_requests | 요청 수 | 공통 |
+
+### 테스트 실행 순서
+
+1. **v1 baseline 확보**: `depoly-v1/k6/load-test-v1.js` 실행 (speedcam-v1-app, 10.178.0.8)
+2. **v2 HTTP 테스트**: `backend/docker/k6/load-test.js` 실행 (speedcam-app, 10.178.0.4)
+3. **v2 MQTT 테스트**: `backend/docker/k6/mqtt-load-test.py` 실행
+4. **결과 비교**: `performance-analysis.md` Section 5의 비교 표에 수치 기입
+
+---
+
 본 문서는 SpeedCam 프로젝트의 가설 기반 부하 테스트 계획을 제공합니다.
 
 ---
@@ -15,13 +65,24 @@
   - speedcam-alert: Celery Alert Worker
   - speedcam-mon: Prometheus + Grafana + Loki + Jaeger
 
+### v1 인프라 구성 (비교 기준)
+
+> v1과 v2는 완전히 별도 인스턴스에서 운영됩니다.
+
+- 1개 GCP e2-standard-2 인스턴스 (2 vCPU, 4 GB RAM):
+  - speedcam-v1-app (10.178.0.8 / 34.64.68.137): Django + Gunicorn (동기 OCR) + MySQL + RabbitMQ (모놀리식)
+  - 별도 모니터링: Prometheus at 10.178.0.9 (v2 speedcam-mon 10.178.0.5와 다름)
+- Gunicorn: 2 workers x 2 threads = 4 핸들러
+- OCR: 동기 처리 (HTTP 스레드 내에서 EasyOCR 실행, 3~10초/건)
+- 테스트 스크립트: `depoly-v1/k6/load-test-v1.js`
+
 ### env.example vs 배포 환경 차이
 
 | 변수 | env.example 기본값 | 실제 배포값 | 영향 |
 |------|-------------------|------------|------|
 | `GUNICORN_WORKERS` | 4 | **2** | HTTP 처리 용량 절반 (8 → 4 핸들러) |
-| `OCR_CONCURRENCY` | 4 | 4 | 차이 없음 |
-| `ALERT_CONCURRENCY` | 100 | 100 | 차이 없음 |
+| `OCR_CONCURRENCY` | **2** | **4** | OCR 동시 처리 2배 |
+| `ALERT_CONCURRENCY` | **50** | **100** | Alert gevent pool 2배 |
 
 > **주의: 본 문서의 모든 용량 계산은 실제 배포 환경 값 기준입니다.**
 
@@ -34,7 +95,8 @@
 | MQTT Subscriber 처리량 | ~50-100 msg/s | 단일 스레드: JSON 파싱 + DB 쓰기 + AMQP 발행 (~10-20ms/건) |
 | OCR 파이프라인 (mock) | ~8-40 tasks/s | 4 workers × (2-10 tasks/s, mock sleep 0.1-0.5s) |
 | OCR 파이프라인 (실제) | ~0.4-2 tasks/s | 4 workers × (0.1-0.5 tasks/s, EasyOCR ~2-10s) |
-| Alert 파이프라인 | ~500-2000 tasks/s | 100 gevent workers × (5-20 tasks/s, FCM mock 기준) |
+| Alert 파이프라인 | ~500-2000 tasks/s | Kombu Consumer (단일 스레드) → Celery gevent pool (concurrency=100) × (5-20 tasks/s, FCM mock 기준) |
+| Kombu Consumer | 단일 스레드 | 이벤트 디스패치 전용 (도메인 이벤트 수신 → send_notification.delay()) |
 | MySQL max_connections | 151 | MySQL 8.0 기본값 |
 | 예상 DB 연결 수 (부하 시) | ~12-20 | Gunicorn(4) + OCR(4) + Alert(100, pooled) + MQTT(1) |
 
@@ -47,8 +109,10 @@ RaspPi MQTT publish (QoS 1)
   → process_ocr.apply_async(queue=ocr_queue, priority=5)
   → OCR Worker: GCS 다운로드 → EasyOCR → 차량 매칭 [vehicles_db]
   → Detection.update(status=completed) [detections_db]
-  → send_notification.apply_async(queue=fcm_queue)
-  → Alert Worker: FCM topic 브로드캐스트 + 개별 푸시
+  → 도메인 이벤트 발행: detections.completed (domain_events exchange, topic)
+  → Alert Worker Kombu Consumer: 이벤트 수신
+  → send_notification.delay() → Celery gevent pool (fcm_queue)
+  → FCM topic 브로드캐스트 + 개별 푸시
   → Notification.create() [notifications_db]
 ```
 
@@ -57,6 +121,7 @@ RaspPi MQTT publish (QoS 1)
 2. **OCR Worker** - CPU 바운드, 4개 동시 처리 한정
 3. **Gunicorn** - 4 핸들러, DB 연결 오버헤드
 4. **MySQL** - 커넥션 풀링 없음, 부하 시 연결 폭주
+5. **Alert Worker Kombu Consumer** - 단일 스레드 이벤트 디스패치, 고속 이벤트 유입 시 잠재 병목
 
 ### 사용 API 엔드포인트
 
@@ -72,6 +137,22 @@ RaspPi MQTT publish (QoS 1)
 ---
 
 ## 2. HTTP 테스트 시나리오 (k6)
+
+### v1 HTTP 테스트 시나리오 (비교용)
+
+> 상세 구현은 `depoly-v1/k6/load-test-v1.js` 참조
+
+| 시나리오 | v1 설명 | VUs | v2 대응 | 비교 가능 |
+|---------|--------|-----|---------|----------|
+| A: 대시보드 폴링 | 3 VUs, 2분 | 3 | dashboard_polling | Yes |
+| B: 동기 OCR 스트레스 | 2 VUs, 2분 | 2 | N/A (MQTT 파이프라인) | No (구조적 차이) |
+| C: 혼합 워크로드 | 0→9 VUs, 2분30초 | 0→9 | mixed_workload | Yes |
+| D: 스파이크 내성 | 0→15 VUs, 1분10초 | 0→15 | spike_resilience | Yes |
+| E: 스트레스 읽기 | 0→50 VUs, 3분30초 | 0→50 | stress_ramp | Yes |
+| F: 스트레스 혼합 | 0→50 VUs, 3분 | 0→50 | stress_mixed | Yes (쓰기 내용 상이*) |
+
+> *v1 stress_mixed 쓰기 = 동기 OCR POST (3~10초), v2 stress_mixed 쓰기 = 차량 등록 POST (<300ms)
+> → 이 차이가 핵심 비교 포인트: OCR 분리 효과
 
 ### 시나리오 A: 대시보드 폴링 (주요 읽기 부하)
 
@@ -374,83 +455,15 @@ python3 mqtt-load-test.py --scenario rush_hour \
 
 ---
 
-## 7. 테스트 실측 결과 (2026-02-12)
-
-> 실행 환경: speedcam-app (e2-small, 2 vCPU, 2 GB) 인스턴스에서 k6/MQTT 스크립트 실행
-> OCR 환경: **실제 EasyOCR** (OCR_MOCK=false) — 가설의 mock 기반 예측과 크게 상이
-> k6 Prometheus RW: `K6_PROMETHEUS_RW_SERVER_URL=http://10.178.0.5:9090/api/v1/write`
-
-### 7.1 k6 HTTP 결과 (모든 임계치 PASS)
-
-**총 5분 40초, 973 iterations, 2,297 requests, 6.75 req/s**
-
-| 시나리오 | 지표 | 가설 | 실측 | 판정 |
-|---------|------|------|------|------|
-| A: 대시보드 폴링 (3 VUs) | p95 | < 200ms | **30.6ms** | ✅ PASS |
-| A: 대시보드 폴링 | 에러율 | < 1% | **0.00%** | ✅ PASS |
-| B: 관리자 작업 (2/min) | p95 | < 300ms | **23.23ms** | ✅ PASS |
-| C: 혼합 워크로드 (9 VUs) | pending p95 | < 500ms | **16.6ms** | ✅ PASS |
-| C: 혼합 워크로드 | statistics p95 | < 500ms | **42.42ms** | ✅ PASS |
-| D: 스파이크 (15 VUs) | p95 | < 1500ms | **40.54ms** | ✅ PASS |
-| D: 스파이크 | 에러율 | < 10% | **0.00%** | ✅ PASS |
-| 전체 | 에러율 | < 5% | **0.21%** | ✅ PASS |
-
-**엔드포인트별 상세 레이턴시:**
-
-| 메트릭 | avg | min | med | max | p90 | p95 |
-|--------|-----|-----|-----|-----|-----|-----|
-| dashboard_req_duration | 19.27ms | 9.73ms | 17.65ms | 118.73ms | 26.89ms | 30.6ms |
-| detections_list_duration | 23.98ms | 14.01ms | 20.53ms | 162.31ms | 33.3ms | 43.29ms |
-| statistics_req_duration | 23.44ms | 13.31ms | 20.4ms | 127.43ms | 34.03ms | 42.42ms |
-| pending_read_duration | 13.08ms | 10.3ms | 12.55ms | 27.22ms | 15.12ms | 16.6ms |
-| admin_req_duration | 17.78ms | 4.21ms | 17.82ms | 53.17ms | 21.05ms | 23.23ms |
-| http_req_duration (전체) | 20.72ms | 3.75ms | 18.23ms | 162.31ms | 30.14ms | 38.85ms |
-
-**분석:**
-- 15 VUs 스파이크에서도 p95 40ms — 가설 1500ms 대비 37배 좋음
-- 4 핸들러(Gunicorn 2w×2t)가 15 VUs를 충분히 소화
-- 유일한 에러: FCM 토큰 업데이트 PATCH 5건 실패 (엔드포인트 호환 문제)
-- 가설이 매우 보수적이었음 → 실제 포화점은 50+ VUs (이전 스트레스 테스트에서 확인)
-
-### 7.2 MQTT 파이프라인 결과 (OCR 병목 심각)
-
-> **중요: 아래 결과는 실제 EasyOCR 환경입니다. 가설은 OCR_MOCK=true 기준으로 작성되었으므로 직접 비교 시 주의.**
-
-| 시나리오 | 발행 성공 | 완료율 (300s) | OCR큐 피크 | 실효 OCR 처리속도 | DLQ |
-|---------|----------|-------------|-----------|----------------|-----|
-| Normal (0.33 msg/s) | 40/40 (100%) | **32/40 (80%)** | 25 | ~0.053 msg/s | 0 |
-| Rush Hour (1.67 msg/s) | 200/200 (100%) | **22/200 (11%)** | 202 | ~0.073 msg/s | 0 |
-| Burst (20 msg/s) | 1200/1200 (100%) | **18/1200 (1.5%)** | 1,381 | ~0.060 msg/s | 0 |
-
-**가설 vs 실측 비교:**
-
-| 지표 | Normal 가설 | Normal 실측 | Rush Hour 가설 | Rush Hour 실측 | Burst 가설 | Burst 실측 |
-|------|-----------|-----------|--------------|--------------|-----------|-----------|
-| 발행 성공률 | 100% | **100%** ✅ | 100% | **100%** ✅ | 100% | **100%** ✅ |
-| 완료율 | 100% | **80%** ❌ | 95% | **11%** ❌ | 100% (drain) | **1.5%** ❌ |
-| 완료 시간 | 60초 | **300초 TO** ❌ | 120초 | **300초 TO** ❌ | 300초 | **300초 TO** ❌ |
-| OCR큐 피크 | < 5 | **25** ❌ | < 50 | **202** ❌ | 200-500 | **1,381** ❌ |
-| DLQ | 0 | **0** ✅ | 0 | **0** ✅ | 0 | **0** ✅ |
-
-**핵심 발견 — OCR 처리 속도:**
-- 가설 (OCR_MOCK): 8-40 tasks/s (prefork 4 workers × 2-10/s)
-- 실측 (EasyOCR): **~0.06 msg/s = 약 17초/건** (가설 대비 133~667배 느림)
-- 원인: e2-small (2 vCPU, 2 GB) 인스턴스에서 EasyOCR 모델 로딩 + 추론 → 메모리/CPU 제약
-- 테스트 후 OCR 큐 잔여: **1,362건** (드레인에 약 6.3시간 소요 예상)
-
-**병목 순위 (실측 기반):**
-1. **OCR Worker** — 실제 EasyOCR 처리 속도가 지배적 병목 (0.06 msg/s)
-2. MQTT Subscriber — 단일 스레드이나, OCR 대비 충분히 빠름 (20 msg/s 발행 성공)
-3. RabbitMQ — 메시지 버퍼링 정상, DLQ 0건
-4. Gunicorn/MySQL — HTTP 계층은 병목 아님 (p95 < 50ms)
-
----
-
-## 8. 테스트 환경 참고사항
+## 7. 테스트 환경 참고사항
 
 - `OCR_MOCK=true`, `FCM_MOCK=true` 환경에서 테스트 가정 (기본)
 - 실제 EasyOCR/FCM 사용 시 처리량이 크게 달라짐 (OCR: ~10-50배 느림)
 - 모든 인스턴스 e2-small (2 vCPU, 2 GB RAM) — 프로덕션 환경에서는 스케일업 필요
 - MySQL 커넥션 풀링 미설정 (`CONN_MAX_AGE=0`) — 고부하 시 연결 오버헤드 발생
 - MQTT Subscriber 단일 스레드 — 메시지 처리 직렬화됨
+- **Alert Worker 구성: Kombu Consumer (단일 스레드, 도메인 이벤트 수신) + Celery gevent pool (concurrency=100, FCM 발송)**
+  - Kombu Consumer는 `detections.completed` 이벤트를 수신하여 `send_notification.delay()` 호출
+  - gevent pool은 FCM 발송 I/O 바운드 작업을 비동기 처리
+  - `OTEL_PYTHON_AUTO_INSTRUMENTATION_EXPERIMENTAL_GEVENT_PATCH=patch_all` 설정 필요 (gevent DB 스레드 안전성 — `docs/GEVENT_DB_THREAD_SAFETY.md` 참조)
 - k6를 대상 서버와 동일 인스턴스에서 실행하면 CPU/메모리 경합 발생 (별도 인스턴스 권장)
