@@ -107,14 +107,17 @@ graph TB
     end
 
     subgraph Workers["Event Processors"]
-        OCR["ocr-worker<br/>• 감지 이벤트 처리<br/>• OCR 수행"]
-        Alert["alert-worker<br/>• 완료 이벤트 처리<br/>• FCM 발송"]
+        OCR["ocr-worker<br/>• 감지 이벤트 처리<br/>• OCR 수행<br/>• detections.completed 발행"]
+        subgraph AlertWorker["alert-worker"]
+            KombuConsumer["Kombu Consumer<br/>(단일 스레드)<br/>domain event 구독"]
+            CeleryGevent["Celery gevent pool<br/>(concurrency=100)<br/>FCM 병렬 전송"]
+        end
     end
 
     subgraph MessageBroker["RabbitMQ"]
         MQTT["MQTT Plugin"]
         Queue1[("감지 이벤트 큐")]
-        Queue2[("알림 이벤트 큐")]
+        DomainEvents[("domain_events exchange<br/>detections.completed")]
     end
 
     subgraph Storage["Google Cloud Storage"]
@@ -127,17 +130,20 @@ graph TB
     Publisher --> Queue1
     Queue1 --> OCR
     OCR -->|"이미지 다운로드"| GCS
-    OCR --> Queue2
-    Queue2 --> Alert
+    OCR -->|"domain event 발행"| DomainEvents
+    DomainEvents -->|"choreography"| KombuConsumer
+    KombuConsumer -->|"send_notification.delay()"| CeleryGevent
 
     Main --> DB1[("default")]
     Main --> DB2[("vehicles_db")]
     OCR --> DB3[("detections_db")]
-    Alert --> DB4[("notifications_db")]
+    AlertWorker --> DB4[("notifications_db")]
 
     style Main fill:#90EE90
     style OCR fill:#87CEEB
-    style Alert fill:#DDA0DD
+    style AlertWorker fill:#DDA0DD
+    style KombuConsumer fill:#C8A2C8
+    style CeleryGevent fill:#DDA0DD
     style MessageBroker fill:#FFB6C1
     style Storage fill:#FFFACD
 ```
@@ -149,7 +155,9 @@ graph TB
 | **Edge Device** | 과속 차량 감지 | MQTT | QoS 1, 경량, 영구 연결 |
 | **main (Django)** | API + MQTT 구독 | HTTP + MQTT | 이벤트 발행만 담당 |
 | **ocr-worker** | 번호판 OCR 처리 | AMQP | 비동기 처리, concurrency=1 |
-| **alert-worker** | FCM 푸시 알림 | AMQP | 고성능, concurrency=100 |
+| **alert-worker** | FCM 푸시 알림 | AMQP domain events | choreography 패턴, gevent concurrency=100 |
+| **alert-worker (Kombu)** | domain event 구독 | AMQP (domain_events exchange) | 단일 스레드 Kombu Consumer |
+| **alert-worker (Celery)** | FCM 병렬 전송 | - | gevent pool, send_notification.delay() |
 | **RabbitMQ** | 메시지 브로커 | MQTT + AMQP | At-Least-Once 보장 |
 
 #### End-to-End 이벤트 흐름
@@ -160,7 +168,8 @@ sequenceDiagram
     participant RMQ as RabbitMQ
     participant Main as main
     participant OCR as ocr-worker
-    participant Alert as alert-worker
+    participant Kombu as alert-worker<br/>(Kombu Consumer)
+    participant Celery as alert-worker<br/>(Celery gevent)
     participant User as 사용자 앱
 
     Edge->>RMQ: MQTT Publish (과속 차량 감지)
@@ -172,10 +181,12 @@ sequenceDiagram
     RMQ->>OCR: 감지 이벤트 수신
     OCR->>OCR: 번호판 OCR 처리
     OCR->>OCR: DB 업데이트 (completed)
-    OCR->>RMQ: OCR 완료 이벤트 발행
+    OCR->>RMQ: detections.completed 발행 (domain_events exchange)
 
-    RMQ->>Alert: 완료 이벤트 수신
-    Alert->>User: FCM Push 알림
+    Note over RMQ,Kombu: Choreography 패턴 — Main Service 불개입
+    RMQ->>Kombu: domain event 수신 (직접 구독)
+    Kombu->>Celery: send_notification.delay()
+    Celery->>User: FCM Push 알림 (gevent 병렬)
 ```
 
 ---
@@ -214,7 +225,7 @@ sequenceDiagram
 | **speedcam-ocr** | Celery OCR Worker | EasyOCR 처리 (concurrency=1) |
 |  | Promtail | 로그 수집 에이전트 |
 |  | cAdvisor | 컨테이너 메트릭 수집 |
-| **speedcam-alert** | Celery Alert Worker | FCM 알림 발송 (concurrency=100) |
+| **speedcam-alert** | Kombu Consumer + Celery gevent Worker | FCM 알림 발송 (gevent concurrency=100) |
 |  | Promtail | 로그 수집 에이전트 |
 |  | cAdvisor | 컨테이너 메트릭 수집 |
 | **speedcam-mon** | Prometheus | 메트릭 수집 |
@@ -227,13 +238,15 @@ sequenceDiagram
 
 ### 3.3 리소스 사용 현황
 
+> 재측정 예정 — 아래 수치는 참고용이며 현재 상태와 다를 수 있습니다.
+
 | 인스턴스 | RAM 사용 | RAM 여유 | 메모리 집약적 프로세스 | 비고 |
 |---------|---------|---------|---------------------|------|
 | speedcam-app | 661MB/2GB | 1.1GB | Gunicorn 2 workers | 안정적 |
 | speedcam-db | 853MB/4GB | 2.6GB | MySQL 버퍼풀 | 충분한 여유 |
 | speedcam-mq | 471MB/2GB | 1.2GB | RabbitMQ | 안정적 |
 | **speedcam-ocr** | 1.0GB/2GB | 721MB | EasyOCR 모델 (1.5GB) | **메모리 부족 위험** |
-| speedcam-alert | 433MB/2GB | 1.3GB | 경량 워커 | 충분한 여유 |
+| speedcam-alert | 433MB/2GB | 1.3GB | Kombu Consumer + Celery gevent | 충분한 여유 |
 | **speedcam-mon** | 1.5GB/2GB | 264MB | Prometheus + Grafana | **메모리 부족 위험** |
 
 **주의사항:**
@@ -266,8 +279,10 @@ sequenceDiagram
 
 | 항목 | 상세 |
 |------|------|
-| **테스트 일시** | 2026-02-12 (k6 4시나리오 + MQTT 3시나리오) |
+| **테스트 일시 (v2)** | 2026-02-12 (k6 4시나리오 + MQTT 3시나리오) |
+| **테스트 일시 (v1)** | 2026-02-19 14:03:38 ~ 14:18:02 UTC (KST 23:03:38 ~ 23:18:02) (TEST_ID: v1-baseline-1771509818) |
 | **k6 실행 위치** | speedcam-app 인스턴스 내부 (localhost 호출) |
+| **v1 k6 실행 위치** | speedcam-v1-app (10.178.0.8) 인스턴스 내부 (localhost 호출) |
 | **MQTT 테스트 실행 위치** | speedcam-app → speedcam-mq (내부 IP 10.178.0.7) |
 | **네트워크 환경** | 동일 VPC (asia-northeast3), 인스턴스 간 지연 <1ms |
 | **부하 발생기 → 서버 지연** | k6: ~0ms (localhost), MQTT: <1ms (같은 VPC) |
@@ -294,13 +309,7 @@ Django REST API의 처리 성능과 응답 시간을 측정하기 위해 4가지
 
 #### 4.3.2 전체 결과 요약
 
-```
-✅ 총 요청: 2,297건 (평균 6.75 req/s)
-✅ 전체 p95 응답시간: 38.85ms
-✅ 에러율: 0.21% (5/2,277건) - FCM 토큰 업데이트 엔드포인트 문제
-✅ 모든 임계값(Threshold) 통과
-✅ Prometheus Remote Write → Grafana 메트릭 기록
-```
+테스트 후 기록
 
 #### 4.3.3 시나리오별 상세 결과
 
@@ -308,68 +317,66 @@ Django REST API의 처리 성능과 응답 시간을 측정하기 위해 4가지
 
 | 메트릭 | avg | min | med | max | p(90) | p(95) |
 |-------|-----|-----|-----|-----|-------|-------|
-| **dashboard_req_duration** | 19.27ms | 9.73ms | 17.65ms | 118.73ms | 26.89ms | 30.6ms |
-| **admin_req_duration** | 17.78ms | 4.21ms | 17.82ms | 53.17ms | 21.05ms | 23.23ms |
-| **detections_list_duration** | 23.98ms | 14.01ms | 20.53ms | 162.31ms | 33.3ms | 43.29ms |
-| **statistics_req_duration** | 23.44ms | 13.31ms | 20.4ms | 127.43ms | 34.03ms | 42.42ms |
-| **pending_read_duration** | 13.08ms | 10.3ms | 12.55ms | 27.22ms | 15.12ms | 16.6ms |
-| **spike_resilience (overall)** | 21.42ms | 8.63ms | 18.79ms | 162.31ms | 31.6ms | 40.54ms |
-| **http_req_duration (전체)** | 20.72ms | 3.75ms | 18.23ms | 162.31ms | 30.14ms | 38.85ms |
+| **dashboard_req_duration** | - | - | - | - | - | - |
+| **admin_req_duration** | - | - | - | - | - | - |
+| **detections_list_duration** | - | - | - | - | - | - |
+| **statistics_req_duration** | - | - | - | - | - | - |
+| **pending_read_duration** | - | - | - | - | - | - |
+| **spike_resilience (overall)** | - | - | - | - | - | - |
+| **http_req_duration (전체)** | - | - | - | - | - | - |
 
-**📸 [스크린샷 삽입: k6 Grafana 대시보드 - 4 시나리오 응답시간 그래프]**
+**[스크린샷: k6 Grafana 대시보드 - 4 시나리오 응답시간 그래프]**
 
 **임계치(Threshold) 검증 결과:**
 
 | 임계치 | 기준 | 실측 | 판정 |
 |--------|------|------|------|
-| dashboard_req_duration p(95) | < 200ms | **30.6ms** | ✅ PASS |
-| detections_list_duration p(95) | < 300ms | **43.29ms** | ✅ PASS |
-| statistics_req_duration p(95) | < 500ms | **42.42ms** | ✅ PASS |
-| pending_read_duration p(95) | < 500ms | **16.6ms** | ✅ PASS |
-| admin_req_duration p(95) | < 300ms | **23.23ms** | ✅ PASS |
-| spike_resilience p(95) | < 1500ms | **40.54ms** | ✅ PASS |
-| errors (전체) | < 5% | **0.21%** | ✅ PASS |
-| errors (dashboard) | < 1% | **0.00%** | ✅ PASS |
-| errors (spike) | < 10% | **0.00%** | ✅ PASS |
+| dashboard_req_duration p(95) | < 200ms | - | - |
+| detections_list_duration p(95) | < 300ms | - | - |
+| statistics_req_duration p(95) | < 500ms | - | - |
+| pending_read_duration p(95) | < 500ms | - | - |
+| admin_req_duration p(95) | < 300ms | - | - |
+| spike_resilience p(95) | < 1500ms | - | - |
+| errors (전체) | < 5% | - | - |
+| errors (dashboard) | < 1% | - | - |
+| errors (spike) | < 10% | - | - |
 
 **주요 인사이트:**
-- **대시보드 폴링 평균 19ms**: 실시간 데이터 조회가 매우 빠름
-- **스파이크 상황(15 VUs)에서도 p95 40ms**: 급격한 트래픽 증가 시에도 안정적 응답 유지
-- **가설 대비 37배 좋은 성능**: 스파이크 가설(p95 < 1500ms) 대비 실측 40ms
-- **4 핸들러(Gunicorn 2w×2t)로 15 VUs 충분히 소화**: 실제 포화점은 50+ VUs
+
+테스트 후 기록
 
 #### 4.3.4 Checks 결과
 
 | Check 항목 | 성공/전체 | 성공률 | 비고 |
 |----------|----------|-------|------|
-| 서버 헬스체크 | 1/1 | **100%** | ✅ |
-| 차량 등록 (201) | ✅ | **100%** | ✅ admin_ops + mixed 시나리오 |
-| FCM 토큰 업데이트 (200) | 0/5 | **0%** | ❌ PATCH 엔드포인트 호환 문제 |
-| 감지 목록 (200) | ✅ | **100%** | ✅ dashboard + spike 시나리오 |
-| 알림 목록 (200) | ✅ | **100%** | ✅ dashboard 시나리오 |
-| 통계 조회 (200) | ✅ | **100%** | ✅ dashboard + spike 시나리오 |
-| 대기 목록 (200) | ✅ | **100%** | ✅ mixed 시나리오 |
-| 혼합 읽기 (200) | ✅ | **100%** | ✅ mixed 시나리오 |
-| 혼합 차량 등록 (201) | ✅ | **100%** | ✅ mixed 시나리오 |
-| 스파이크 감지 목록 | ✅ | **100%** | ✅ |
-| 스파이크 알림 목록 | ✅ | **100%** | ✅ |
-| 스파이크 통계 | ✅ | **100%** | ✅ |
+| 서버 헬스체크 | - | - | - |
+| 차량 등록 (201) | - | - | admin_ops + mixed 시나리오 |
+| FCM 토큰 업데이트 (200) | - | - | PATCH 엔드포인트 |
+| 감지 목록 (200) | - | - | dashboard + spike 시나리오 |
+| 알림 목록 (200) | - | - | dashboard 시나리오 |
+| 통계 조회 (200) | - | - | dashboard + spike 시나리오 |
+| 대기 목록 (200) | - | - | mixed 시나리오 |
+| 혼합 읽기 (200) | - | - | mixed 시나리오 |
+| 혼합 차량 등록 (201) | - | - | mixed 시나리오 |
+| 스파이크 감지 목록 | - | - | - |
+| 스파이크 알림 목록 | - | - | - |
+| 스파이크 통계 | - | - | - |
 
-> 전체: 2,272/2,277 checks 성공 (99.78%). 실패 5건은 모두 FCM 토큰 업데이트 PATCH 엔드포인트.
+> 테스트 후 기록
 
 #### 4.3.5 HTTP API 최대 TPS 분석
 
 | 항목 | 값 | 근거 |
 |------|-----|------|
 | **현재 설정** | GUNICORN_WORKERS=2 (각 2 threads = 총 4 HTTP handlers) | 배포 환경 (env.example 기본값=4와 다름) |
-| **4시나리오 테스트** | 15 VUs에서 p95=40.54ms, 에러율 0% | k6 4시나리오 실측 |
-| **스트레스 테스트** | 50 VUs에서 p95=2,230ms, 에러율 1.5% | k6 stress_ramp 실측 |
-| **포화점** | **30~50 VUs 사이** | 15 VUs(정상) → 50 VUs(성능 저하) |
-| **안정 최대 TPS** | **~25 req/s** (50 VUs, e2-small에서 k6+서버 공유 시) | 스트레스 테스트 실측 |
+| **4시나리오 테스트** | - | k6 4시나리오 실측 후 기록 |
+| **스트레스 테스트** | - | k6 stress_ramp 실측 후 기록 |
+| **포화점** | - | 재측정 예정 |
+| **안정 최대 TPS** | - | 재측정 예정 |
 | **이론 최대 TPS** | **~80-100 req/s** | 4 handlers × 평균 20ms 기준 |
 | **주요 병목** | Gunicorn 핸들러 포화 + DB 커넥션 (CONN_MAX_AGE 미설정) | 스트레스 테스트 분석 |
 
-> **측정 근거:** 4시나리오 테스트(가설 기반)에서 15 VUs까지 정상, 스트레스 테스트(50 VUs)에서 포화 확인. 실측 안정 TPS ~25 req/s는 k6가 동일 인스턴스에서 실행된 결과이므로 별도 클라이언트 사용 시 더 높을 수 있음.
+> **측정 근거:** 테스트 수행 후 기록 예정
 
 **확장 방법:**
 1. `CONN_MAX_AGE` 설정으로 커넥션 풀링 활성화
@@ -391,51 +398,47 @@ Django REST API의 처리 성능과 응답 시간을 측정하기 위해 4가지
 | **Phase 1** | stress_ramp (읽기 전용) | 0→10→30→50→0 | 3분30초 | GET 읽기 100% |
 | **Phase 2** | stress_mixed (혼합) | 0→10→30→50→0 | 3분 | 읽기 80% + 쓰기 20% |
 
+> v1에도 동일한 스트레스 테스트가 추가되었습니다 (`depoly-v1/k6/load-test-v1.js`의 stress_ramp, stress_mixed 시나리오).
+> v1 스트레스 결과와 비교하면 아키텍처 전환의 한계점 차이를 확인할 수 있습니다.
+> **핵심 비교:** v1 stress_mixed의 20% 동기 OCR 쓰기 vs v2 stress_mixed의 20% 차량등록 쓰기
+
 **전체 결과** (Prometheus Remote Write 활성, Grafana 메트릭 기록됨)
 
-```
-총 요청:      10,525건 (평균 25.1 req/s)
-에러율:       1.50% (158건 실패)
-p95 응답시간: 2,230ms
-최대 응답시간: 4,260ms
-```
+테스트 후 기록
 
 **응답 시간 분포**
 
 | 메트릭 | avg | med | p(90) | p(95) | max |
 |-------|-----|-----|-------|-------|-----|
-| **전체 (req_duration)** | 790ms | 742ms | 1,770ms | 2,230ms | 4,260ms |
-| **읽기 (read_latency)** | 800ms | 751ms | 1,770ms | 2,230ms | 4,260ms |
-| **쓰기 (write_latency)** | 685ms | 526ms | 1,730ms | 2,020ms | 2,790ms |
+| **전체 (req_duration)** | - | - | - | - | - |
+| **읽기 (read_latency)** | - | - | - | - | - |
+| **쓰기 (write_latency)** | - | - | - | - | - |
 
 **Phase별 에러율**
 
 | Phase | Check | 성공률 | 실패율 |
 |-------|-------|-------|-------|
-| **stress_ramp** (50 VUs, 읽기) | status is 200 | **97%** | 3% |
-| **stress_mixed** (50 VUs, 읽기) | read 200 | **99%** | 1% |
-| **stress_mixed** (50 VUs, 쓰기) | write 201 | **99%** | 1% |
+| **stress_ramp** (50 VUs, 읽기) | status is 200 | - | - |
+| **stress_mixed** (50 VUs, 읽기) | read 200 | - | - |
+| **stress_mixed** (50 VUs, 쓰기) | write 201 | - | - |
 
-> **테스트 환경 영향 참고:** k6와 Prometheus Remote Write가 동일 인스턴스(e2-small, 2 vCPU)에서 실행되어, k6의 요청 생성 속도가 제한됩니다 (54 req/s → 25 req/s). 이로 인해 서버에 실제 도달하는 부하가 줄어 에러율은 낮아지나, 시스템 전체 리소스 경합으로 응답 시간(p95)은 증가합니다.
+> **테스트 환경 영향 참고:** k6와 Prometheus Remote Write가 동일 인스턴스(e2-small, 2 vCPU)에서 실행되어, k6의 요청 생성 속도가 제한됩니다. 이로 인해 서버에 실제 도달하는 부하가 줄어 에러율은 낮아지나, 시스템 전체 리소스 경합으로 응답 시간(p95)은 증가합니다.
 
-**📸 [스크린샷 삽입: k6 Grafana 대시보드 - VUs 변화에 따른 응답시간/에러율 그래프]**
+**[스크린샷: k6 Grafana 대시보드 - VUs 변화에 따른 응답시간/에러율 그래프]**
 
-**📸 [스크린샷 삽입: Container Metrics - speedcam-app의 CPU/Memory 그래프 (스트레스 테스트 구간)]**
+**[스크린샷: Container Metrics - speedcam-app의 CPU/Memory 그래프 (스트레스 테스트 구간)]**
 
 **부하 수준별 성능 비교 (실측)**
 
 | VUs | 시나리오 | p95 | 에러율 | 처리량 | 판정 |
 |-----|---------|-----|-------|-------|------|
-| **15** | spike_resilience | **49ms** | **0%** | 6.7 req/s | ✅ 정상 |
-| **50** | stress_ramp | **2,230ms** | **3%** | 25.1 req/s | ⚠️ 성능 저하 |
-| **50** | stress_mixed | **2,020ms** | **1%** | 25.1 req/s | ⚠️ 성능 저하 |
+| **15** | spike_resilience | - | - | - | - |
+| **50** | stress_ramp | - | - | - | - |
+| **50** | stress_mixed | - | - | - | - |
 
 **핵심 발견:**
-- **15 VUs → 50 VUs**: p95가 49ms에서 2,230ms로 **45배 악화**
-- 50 VUs에서 median=742ms → 대부분의 요청이 700ms 이상 소요 (15 VUs에서 17ms 대비 **43배**)
-- 에러율은 1.5%로 서비스 가용 범위이나, **응답 시간 저하가 심각** (SLA 기준 위반 가능)
-- 쓰기(POST)가 읽기(GET) 대비 med 기준 ~30% 빠름 (526ms vs 751ms) — DB 읽기가 쓰기보다 무거운 패턴
-- **e2-small에서 k6+서버 동시 실행의 한계**: 별도 부하 발생기 인스턴스 사용 시 더 정확한 측정 가능
+
+테스트 후 기록
 
 ---
 
@@ -475,16 +478,16 @@ Stage 3: OCR 처리 (GCS 다운로드 + EasyOCR 추론)
 
 | Detection ID | MQTT 수신 시각 | Detection 생성 | OCR 디스패치 | 총 Subscriber 처리 시간 |
 |-------------|--------------|---------------|-------------|---------------------|
-| #3284 | 01:19:00.489 | 01:19:00.554 | 01:19:00.560 | **71ms** |
-| #3285 | 01:49:54.207 | 01:49:54.222 | 01:49:54.229 | **22ms** |
-| #3286 | 01:56:37.918 | 01:56:37.925 | 01:56:37.928 | **10ms** |
-| #3287 | 02:09:11.080 | 02:09:11.091 | 02:09:11.097 | **17ms** |
-| #3288 | 02:15:44.137 | 02:15:44.145 | 02:15:44.148 | **11ms** |
+| - | - | - | - | - |
+| - | - | - | - | - |
+| - | - | - | - | - |
+| - | - | - | - | - |
+| - | - | - | - | - |
 
-**평균 Subscriber 처리 시간: 15ms** (Cold Start #3284 제외)
+**평균 Subscriber 처리 시간:** 테스트 후 기록
 
 - JSON 파싱 + DB Insert + AMQP Publish 포함
-- #3284의 71ms는 첫 요청 시 DB 커넥션 수립 시간이 포함된 이상값 (이후 안정화)
+- Cold Start 시 DB 커넥션 수립 시간 포함으로 이상값 발생 가능 (이후 안정화)
 
 ---
 
@@ -492,11 +495,11 @@ Stage 3: OCR 처리 (GCS 다운로드 + EasyOCR 추론)
 
 | Detection ID | 디스패치 시각 | Worker 수신 시각 | AMQP 전달 시간 |
 |-------------|-------------|----------------|--------------|
-| #3284 | 01:19:00.560 | 01:19:00.563 | **3ms** |
-| #3285 | 01:49:54.229 | 01:49:54.230 | **1ms** |
-| #3286 | 01:56:37.928 | 01:56:37.935 | **7ms** |
+| - | - | - | - |
+| - | - | - | - |
+| - | - | - | - |
 
-**평균 AMQP 전달 시간: ~3ms**
+**평균 AMQP 전달 시간:** 테스트 후 기록
 
 - RabbitMQ 내부 라우팅 오버헤드 매우 낮음
 
@@ -506,26 +509,25 @@ Stage 3: OCR 처리 (GCS 다운로드 + EasyOCR 추론)
 
 | Detection ID | 이미지 | OCR 처리 시간 | 인식 결과 | 신뢰도 | 비고 |
 |-------------|--------|-------------|----------|--------|------|
-| #3284 | test-plate-1.jpg (흰 이미지) | **35.59s** | None | 0% | Cold Start (모델 로딩 포함) |
-| #3285 | plate-01.jpg (자동차 배경) | **8.39s** | None | 0% | Warm, 배경 노이즈로 인식 실패 |
-| #3286 | real-plate-01.jpg (고대비) | **5.15s** | 12가3456 | **72.1%** | ✅ 정상 인식 |
-| #3287 | real-plate-02.jpg (고대비) | **5.11s** | 34나5678 | **86.8%** | ✅ 정상 인식 |
-| #3288 | real-plate-03.jpg (고대비) | **5.02s** | 56다7890 | **98.8%** | ✅ 정상 인식 |
+| - | - | - | - | - | - |
+| - | - | - | - | - | - |
+| - | - | - | - | - | - |
+| - | - | - | - | - | - |
+| - | - | - | - | - | - |
 
 **OCR 성능 요약:**
 
 | 지표 | 값 |
 |------|-----|
-| **Cold Start (모델 로딩 포함)** | ~35s |
-| **Warm OCR 평균** | **~5.1s** (GCS 다운로드 ~0.5s + EasyOCR 추론 ~4.6s) |
-| **OCR 최대 TPS** | **~0.2 msg/s** (1 worker, concurrency=1) |
-| **고대비 한국어 번호판 인식률** | **100%** (3/3) |
-| **평균 신뢰도** | **85.9%** |
+| **Cold Start (모델 로딩 포함)** | 재측정 예정 |
+| **Warm OCR 평균** | 재측정 예정 |
+| **OCR 최대 TPS** | 재측정 예정 |
+| **고대비 한국어 번호판 인식률** | 재측정 예정 |
+| **평균 신뢰도** | 재측정 예정 |
 
 **주요 인사이트:**
-- 고대비 한국어 번호판 이미지에서 OCR 인식률 100%
-- 배경 노이즈가 있는 이미지는 인식 실패 (전처리 필요)
-- Warm 상태 OCR 처리 시간 5.1s는 단일 워커 기준으로 적절
+
+테스트 후 기록
 
 ---
 
@@ -535,27 +537,29 @@ Stage 3: OCR 처리 (GCS 다운로드 + EasyOCR 추론)
 
 ```
 Edge Device
-    ↓ MQTT Publish (~50ms network)
+    ↓ MQTT Publish (network)
 RabbitMQ MQTT Plugin
-    ↓ Internal routing (~1ms)
+    ↓ Internal routing
 Django Subscriber (MQTT → DB → AMQP)
-    ↓ ~15ms (JSON parse + DB insert + AMQP publish)
+    ↓ (JSON parse + DB insert + AMQP publish)
 RabbitMQ AMQP Queue
-    ↓ ~3ms (queue routing)
+    ↓ (queue routing)
 OCR Worker
-    ↓ ~5,100ms (GCS download + EasyOCR inference)
+    ↓ (GCS download + EasyOCR inference)
 DB Update (completed)
-    ↓ ~10ms
-Alert Queue → FCM Notification
-    ↓ (FCM 미구현 상태)
+    ↓
+RabbitMQ domain_events exchange (detections.completed)
+    ↓ Choreography
+Alert Worker Kombu Consumer
+    ↓ send_notification.delay()
+Alert Worker Celery gevent pool → FCM Notification
 
-Total E2E: ~5,200ms (warm) / ~35,700ms (cold start)
+Total E2E: 재측정 예정
 ```
 
 **병목 지점:**
-- **OCR Worker (5.1s)**: 전체 파이프라인의 98% 차지
-- GCS 다운로드: ~0.5s
-- EasyOCR 추론: ~4.6s
+- **OCR Worker**: 전체 파이프라인의 지배적 병목 (GCS 다운로드 + EasyOCR 추론)
+- 구체적 수치는 재측정 후 기록
 
 **개선 방안:**
 1. **GPU 인스턴스 전환**: CPU → GPU로 OCR 추론 시간 단축 (5s → <1s 목표)
@@ -586,11 +590,11 @@ Total E2E: ~5,200ms (warm) / ~35,700ms (cold start)
 
 | 시나리오 | 발행 성공 | 발행 실패 | 평균 발행 지연 | 실측 발행 속도 |
 |---------|----------|----------|-------------|-------------|
-| **Normal** | 40/40 (100%) | 0건 | 0.91ms | 0.33 msg/s |
-| **Rush Hour** | 200/200 (100%) | 0건 | 0.38ms | 1.66 msg/s |
-| **Burst** | 1,200/1,200 (100%) | 0건 | 0.37ms | 19.96 msg/s |
+| **Normal** | - | - | - | - |
+| **Rush Hour** | - | - | - | - |
+| **Burst** | - | - | - | - |
 
-> 전 시나리오에서 MQTT 발행 100% 성공. RabbitMQ가 20 msg/s까지 안정적으로 수용.
+> 테스트 후 기록
 
 ---
 
@@ -598,13 +602,13 @@ Total E2E: ~5,200ms (warm) / ~35,700ms (cold start)
 
 | 지표 | Normal 가설 | Normal 실측 | Rush Hour 가설 | Rush Hour 실측 | Burst 가설 | Burst 실측 |
 |------|-----------|-----------|--------------|--------------|-----------|-----------|
-| **발행 성공률** | 100% | **100%** ✅ | 100% | **100%** ✅ | 100% | **100%** ✅ |
-| **완료율 (300s)** | 100% | **80% (32/40)** ❌ | 95% | **11% (22/200)** ❌ | 100% (drain) | **1.5% (18/1200)** ❌ |
-| **E2E 완료 시간** | 60초 | **300초 TO** ❌ | 120초 | **300초 TO** ❌ | 300초 | **300초 TO** ❌ |
-| **OCR 큐 피크** | < 5 | **25** ❌ | < 50 | **202** ❌ | 200-500 | **1,381** ❌ |
-| **DLQ 메시지** | 0 | **0** ✅ | 0 | **0** ✅ | 0 | **0** ✅ |
+| **발행 성공률** | 100% | - | 100% | - | 100% | - |
+| **완료율 (300s)** | 100% | - | 95% | - | 100% (drain) | - |
+| **E2E 완료 시간** | 60초 | - | 120초 | - | 300초 | - |
+| **OCR 큐 피크** | < 5 | - | < 50 | - | 200-500 | - |
+| **DLQ 메시지** | 0 | - | 0 | - | 0 | - |
 
-> 가설은 OCR_MOCK=true 기준으로 작성. 실제 EasyOCR 환경에서는 OCR 처리 속도가 **133~667배** 느림.
+> 가설은 OCR_MOCK=true 기준으로 작성. 실제 EasyOCR 환경에서의 실측값은 테스트 후 기록.
 
 ---
 
@@ -613,13 +617,13 @@ Total E2E: ~5,200ms (warm) / ~35,700ms (cold start)
 ```
 시간(s)  완료  대기  OCR큐  FCM큐  실효 처리속도
 ──────────────────────────────────────────────
-  10      16    24    24     0     -
-  50      19    21    22     0     0.075 msg/s
- 100      21    19    19     0     0.040 msg/s
- 150      24    16    16     0     0.060 msg/s
- 200      26    14    14     0     0.040 msg/s
- 250      29    11    11     0     0.060 msg/s
- 300      32     8     9     0     0.060 msg/s (타임아웃)
+  10       -     -     -     -     -
+  50       -     -     -     -     -
+ 100       -     -     -     -     -
+ 150       -     -     -     -     -
+ 200       -     -     -     -     -
+ 250       -     -     -     -     -
+ 300       -     -     -     -     -
 ```
 
 **Rush Hour 시나리오 - OCR 큐 드레인 추이**
@@ -627,12 +631,12 @@ Total E2E: ~5,200ms (warm) / ~35,700ms (cold start)
 ```
 시간(s)  완료  대기  OCR큐  FCM큐
 ──────────────────────────────────
-  10       7   193   201     0     ← 발행 직후 큐 폭주
-  60      10   190   198     0
- 120      13   187   195     0
- 180      16   184   193     0
- 240      19   181   189     0
- 300      22   178   186     0     ← 타임아웃, 178건 미처리
+  10       -     -     -     -
+  60       -     -     -     -
+ 120       -     -     -     -
+ 180       -     -     -     -
+ 240       -     -     -     -
+ 300       -     -     -     -
 ```
 
 **Burst 시나리오 - OCR 큐 드레인 추이**
@@ -640,19 +644,19 @@ Total E2E: ~5,200ms (warm) / ~35,700ms (cold start)
 ```
 시간(s)  완료  대기   OCR큐    FCM큐
 ──────────────────────────────────────
-  10       3  1197   1,381     0     ← 1,200건 + 기존 백로그
-  60       6  1194   1,378     0
- 120       9  1191   1,375     0
- 180      12  1188   1,372     0
- 240      15  1185   1,369     0
- 300      18  1182   1,366     0     ← 타임아웃, 1,182건 미처리
+  10       -     -      -        -
+  60       -     -      -        -
+ 120       -     -      -        -
+ 180       -     -      -        -
+ 240       -     -      -        -
+ 300       -     -      -        -
 ```
 
-**📸 [스크린샷 삽입: RabbitMQ 대시보드 - OCR 큐 깊이 변화 (3 시나리오 전체 구간)]**
+**[스크린샷: RabbitMQ 대시보드 - OCR 큐 깊이 변화 (3 시나리오 전체 구간)]**
 
-**📸 [스크린샷 삽입: Celery Workers 대시보드 - OCR Task 처리 속도 (테스트 구간)]**
+**[스크린샷: Celery Workers 대시보드 - OCR Task 처리 속도 (테스트 구간)]**
 
-**📸 [스크린샷 삽입: Container Metrics - speedcam-ocr CPU/Memory (테스트 구간)]**
+**[스크린샷: Container Metrics - speedcam-ocr CPU/Memory (테스트 구간)]**
 
 ---
 
@@ -660,18 +664,203 @@ Total E2E: ~5,200ms (warm) / ~35,700ms (cold start)
 
 | 지표 | 단건 (4.4.2) | Normal | Rush Hour | Burst |
 |------|-------------|--------|-----------|-------|
-| OCR 처리 속도 | **0.2 msg/s** (5.1s/건) | **0.053 msg/s** (18.8s/건) | **0.073 msg/s** (13.7s/건) | **0.060 msg/s** (16.7s/건) |
-| OCR 큐 피크 | 0 | **25** | **202** | **1,381** |
-| 파이프라인 완료율 | 100% | **80%** | **11%** | **1.5%** |
-| 부하 시 성능 저하 | - | **3.7배** | **2.7배** | **3.3배** |
+| OCR 처리 속도 | - | - | - | - |
+| OCR 큐 피크 | - | - | - | - |
+| 파이프라인 완료율 | - | - | - | - |
+| 부하 시 성능 저하 | - | - | - | - |
 
 **동시 부하 시 OCR 처리 속도 저하 원인 분석:**
-1. **메모리 압박**: e2-small(2GB)에서 EasyOCR 모델(1.5GB) + 큐 버퍼 → 721MB 여유분 소진
+1. **메모리 압박**: e2-small(2GB)에서 EasyOCR 모델(1.5GB) + 큐 버퍼 → 메모리 여유분 소진
 2. **GCS 다운로드 경합**: 연속 다운로드 시 네트워크/API 지연 증가
 3. **CPU 경합**: OCR 추론 중 Celery 큐 관리 오버헤드
-4. **큐 백로그 누적**: Rush Hour/Burst 후 큐 드레인에 수 시간 소요 (Burst 후 잔여 1,362건 → 약 6.3시간)
+4. **큐 백로그 누적**: Rush Hour/Burst 후 큐 드레인에 수 시간 소요
 
-> **결론:** 가장 낙관적인 시나리오(Normal, 0.33 msg/s)에서도 OCR Worker가 처리를 따라가지 못합니다. **OCR Worker 확장(수평 또는 GPU 전환)은 선택이 아닌 필수입니다.**
+> **결론:** OCR Worker가 전체 파이프라인의 지배적 병목. **OCR Worker 확장(수평 또는 GPU 전환)은 선택이 아닌 필수입니다.**
+
+---
+
+## 4.5 v1 부하 테스트 결과 (Before — 동기 OCR 아키텍처)
+
+### 4.5.1 테스트 메타데이터
+
+| 항목 | 상세 |
+|------|------|
+| **테스트 일시** | 2026-02-19 14:03:38 ~ 14:18:02 UTC (KST 23:03:38 ~ 23:18:02) |
+| **TEST_ID** | v1-baseline-1771509818 |
+| **인스턴스** | speedcam-v1-app (10.178.0.8) |
+| **모니터링** | Prometheus / Grafana at 10.178.0.9 / 10.178.0.9:3000 |
+| **총 소요 시간** | 14분 24.1초 |
+| **시나리오 수** | 6개 |
+| **최대 VUs** | 50 |
+| **종료 코드** | 99 (임계치 위반 3건 — 정상 범위) |
+
+---
+
+> **측정 도구별 수치 참고:** v1 OCR 응답시간 수치는 **Grafana Django Application Metrics 대시보드**에서 관측된 값(서버 측 histogram 기반)을 사용합니다. k6 커스텀 메트릭 원본 값(avg 12.17s, p95 20.83s)과 차이가 있으며, 이는 Django histogram 버킷 보간과 측정 범위 차이 때문입니다.
+
+### 4.5.2 임계치(Threshold) 검증 결과
+
+> **임계치 설정 기준:** v1 임계치는 "이 정도면 합격"이라는 품질 기준이 아니라, **v1 동기 OCR 아키텍처의 한계를 정량적으로 드러내기 위한 측정 기준**입니다. 특히 스트레스 시나리오의 기준은 의도적으로 관대하게 설정하여, 관대한 기준조차 통과하지 못하는 항목이 곧 아키텍처 전환이 필요한 근거가 됩니다.
+
+| 임계치 | 기준 | 실측 | 판정 | 기준 설정 근거 |
+|--------|------|------|------|--------------|
+| 차량 목록 조회 p95 | < 300ms | 215.87ms | PASS | 단순 DB 페이지네이션 조회 |
+| 대시보드 응답 p95 | < 200ms | 2.66s | FAIL | 순수 읽기, OCR 없는 정상 응답 기대 |
+| 전체 에러율 | < 5% | 0.55% | PASS | 전체 요청 대비 허용 실패율 |
+| 에러율 (대시보드 폴링) | < 1% | 0.00% | PASS | 읽기 전용, 실패 불허 |
+| 에러율 (스파이크) | < 10% | 0.00% | PASS | 15 VUs 급증 시 큐잉 타임아웃 허용 |
+| 에러율 (스트레스 혼합) | < 30% | 19.51% | PASS | 50 VUs + OCR → 시스템 붕괴 관측 목적 |
+| 에러율 (스트레스 읽기) | < 20% | 0.00% | PASS | 50 VUs 읽기 과부하 허용 |
+| 에러율 (동기 OCR) | < 20% | 0.00% | PASS | 실제 이미지 OCR, 네트워크 실패만 허용 |
+| 스파이크 응답 p95 | < 2s | 128.06ms | PASS | 15 VUs 큐잉 포함 |
+| 동기 OCR 응답 p95 | < 10s | 24.2s | FAIL | EasyOCR CPU 추론 ~3s 기준, 관대하게 10s |
+| 스트레스 읽기 p95 | < 5s | 337.41ms | PASS | 50 VUs 극한 큐잉 허용 |
+| 스트레스 쓰기 p95 | < 30s | 30s | FAIL | k6 요청 타임아웃 상한 = 사실상 "타임아웃 전 완료" 기준 |
+
+**FAIL 분석:**
+
+| FAIL 항목 | 원인 | 의미 |
+|-----------|------|------|
+| 대시보드 응답 p95 (2.66s > 200ms) | OCR이 HTTP 스레드를 점유하면 읽기 요청도 대기 | **OCR 부하가 읽기 API에 전파되는 구조적 문제** |
+| 동기 OCR 응답 p95 (24.2s > 10s) | GCS 다운로드 + EasyOCR 추론이 HTTP 스레드에서 동기 실행 | **관대한 10s 기준도 2.4배 초과** |
+| 스트레스 쓰기 p95 (30s = 30s) | 50 VUs 혼합 부하에서 OCR 요청이 타임아웃 상한에 도달 | **타임아웃까지 허용해도 FAIL → 사실상 처리 불가** |
+
+---
+
+### 4.5.3 커스텀 메트릭 응답 시간
+
+| 메트릭 | avg | min | med | max | p90 | p95 |
+|--------|-----|-----|-----|-----|-----|-----|
+| 차량 목록 조회 | 160.1ms | 9.87ms | 27.71ms | 11.64s | 91.73ms | 215.87ms |
+| 대시보드 응답 | 402.28ms | 9.87ms | 23.56ms | 11.64s | 133.26ms | 2.66s |
+| 동기 OCR 응답 | 15.1s | 6.16s | 15.4s | 25s | 20s | 24.2s |
+| 스트레스 읽기 | 837.57ms | 9.01ms | 22.41ms | 60s | 97.43ms | 337.41ms |
+| 스트레스 쓰기 (OCR) | 26.93s | 13.27s | 30s | 30s | 30s | 30s |
+| 미확인 목록 조회 | 127.66ms | 15.36ms | 30.62ms | 12.18s | 105.8ms | 149.37ms |
+
+> stress_write_duration avg=26.93s, med=30s — 대부분의 OCR 동기 쓰기 요청이 타임아웃 상한(30s)에 도달했음을 나타냅니다.
+
+---
+
+### 4.5.4 시나리오별 상세 분석
+
+#### A. dashboard_polling — 대시보드 폴링
+
+- **결과:** 에러율 0% (0/108), 정상 완료
+- **응답 시간:** dashboard_req_duration p95=2.66s (임계치 200ms 초과 FAIL)
+- **인사이트:** VUs=3의 낮은 부하에서도 p95가 2.66s에 달했습니다. 대다수 요청의 med=23.56ms임을 감안하면 일부 요청이 OCR 처리 중인 HTTP 스레드 대기로 인해 극단적인 응답 지연을 겪었음을 나타냅니다. 동기 OCR이 HTTP 스레드를 점유하는 구조적 문제가 폴링 요청에도 직접 영향을 미쳤습니다.
+
+> **[캡처 A-1]** k6 Prometheus Dashboard → HTTP Request Duration 패널
+> - Grafana URL: http://10.178.0.9:3000
+> - 시간 범위: 2026-02-19 23:03:00 ~ 23:19:00 KST
+> - 확인 포인트: dashboard_polling 구간(초기 2분) p95 응답시간 분포, OCR 요청 발생 시 폴링 응답시간 급등 여부
+
+---
+
+#### B. sync_ocr_stress — 동기 OCR 핵심 병목
+
+- **결과:** 에러율 0% (0/12), 정상 완료
+- **응답 시간:** OCR POST avg=15.1s, p95=24.2s (임계치 10,000ms FAIL)
+- **인사이트:** HTTP 스레드에서 동기적으로 EasyOCR을 실행하는 구조에서 단 12건의 OCR 요청만으로도 평균 15.1초가 소요되었습니다. OCR이 HTTP 스레드를 점유하는 동안 다른 모든 요청이 큐잉되어 대기합니다. 요청 수가 적어 에러율 0%를 달성했지만, 처리 시간 자체가 임계치를 2.4배 초과하는 병목을 확인했습니다.
+
+> **[캡처 B-1]** k6 Prometheus Dashboard → ocr_req_duration 패널
+> - Grafana URL: http://10.178.0.9:3000
+> - 시간 범위: 2026-02-19 23:03:00 ~ 23:19:00 KST
+> - 확인 포인트: sync_ocr_stress 구간의 OCR 응답시간 분포, avg 15.1s / p95 24.2s 확인
+
+> **[캡처 B-2]** Container Metrics → speedcam-v1-app CPU 사용률
+> - Grafana URL: http://10.178.0.9:3000
+> - 시간 범위: 2026-02-19 23:03:00 ~ 23:19:00 KST
+> - 확인 포인트: OCR 동기 처리 구간의 CPU 점유율, Gunicorn 스레드 포화 여부
+
+---
+
+#### C. mixed_workload — 혼합 워크로드
+
+- **결과:** 전체 에러율 0.55% (40/7248)의 대부분이 stress_mixed에 집중
+- **인사이트:** 읽기와 OCR 쓰기가 혼합된 환경에서 OCR 동기 처리가 읽기 요청의 응답시간에도 영향을 미쳤습니다. 별도 커스텀 메트릭이 없어 전체 http_req_duration 기준으로 평가됩니다.
+
+---
+
+#### D. spike_resilience — 스파이크 내성
+
+- **결과:** 에러율 0% (0/1731), 완전 성공
+- **응답 시간:** p95=128.06ms, avg=51.31ms
+- **인사이트:** 읽기 전용 스파이크(0→15 VUs)에서는 우수한 성능을 보였습니다. OCR 요청이 없는 순수 읽기 부하에서는 v1 아키텍처도 안정적으로 동작합니다. 이는 OCR 동기 처리가 정확히 병목임을 역설적으로 증명합니다.
+
+> **[캡처 D-1]** k6 Prometheus Dashboard → spike_resilience 구간 VUs 및 응답시간
+> - Grafana URL: http://10.178.0.9:3000
+> - 시간 범위: 2026-02-19 23:03:00 ~ 23:19:00 KST
+> - 확인 포인트: VUs 급증 시 응답시간 변화, p95=128.06ms 확인
+
+---
+
+#### E. stress_ramp — 50 VUs 읽기 전용 스트레스
+
+- **결과:** 에러율 0% (0/5022), 완전 성공
+- **응답 시간:** stress_read_duration p95=337.41ms (임계치 5,000ms PASS)
+- **인사이트:** 읽기 전용 요청에서 50 VUs까지 에러 없이 처리했습니다. stress_read_duration의 max=60s는 타임아웃 발생을 나타내지만 p95=337ms로 대부분 정상 처리되었습니다. OCR이 개입하지 않으면 v1도 50 VUs 읽기 부하를 수용할 수 있음을 확인했습니다.
+
+> **[캡처 E-1]** k6 Prometheus Dashboard → stress_ramp 구간 응답시간 및 VUs
+> - Grafana URL: http://10.178.0.9:3000
+> - 시간 범위: 2026-02-19 23:03:00 ~ 23:19:00 KST
+> - 확인 포인트: 0→50 VUs 램프업 구간의 응답시간 추이, stress_read_duration p95=337ms 확인
+
+---
+
+#### F. stress_mixed — 50 VUs 혼합 (핵심 발견)
+
+- **결과:** 에러율 19.51% (40/205) — 이 테스트의 핵심 발견
+- **응답 시간:** stress_write_duration p95=30s, avg=26.93s (임계치 30,000ms FAIL)
+- **체크 성공률:**
+  - 스트레스 혼합 읽기 200: 91% (155/170) — 9% fail
+  - 스트레스 혼합 OCR POST 성공: **28% (10/35)** — OCR 쓰기 요청 72% 실패
+- **인사이트:** 50 VUs에서 80% 읽기 + 20% OCR 쓰기가 혼합될 때 시스템이 사실상 붕괴합니다. OCR POST 성공률 28%는 동기 OCR이 HTTP 스레드를 점유하여 4개의 Gunicorn 스레드가 포화 상태가 됨으로써 나머지 요청이 모두 타임아웃되는 구조적 한계를 보여줍니다. 이 데이터가 v2 비동기 EDA 전환의 핵심 근거입니다.
+
+> **[캡처 F-1]** k6 Prometheus Dashboard → stress_mixed 구간 에러율 및 응답시간
+> - Grafana URL: http://10.178.0.9:3000
+> - 시간 범위: 2026-02-19 23:03:00 ~ 23:19:00 KST
+> - 확인 포인트: stress_mixed 구간 에러율 급등(19.51%), OCR 쓰기 응답시간 30s 도달, 읽기 응답시간 동반 상승 여부
+
+> **[캡처 F-2]** Container Metrics → speedcam-v1-app CPU / Memory
+> - Grafana URL: http://10.178.0.9:3000
+> - 시간 범위: 2026-02-19 23:03:00 ~ 23:19:00 KST
+> - 확인 포인트: stress_mixed 구간 CPU 포화, 메모리 압박, Gunicorn 스레드 포화 지표
+
+**Django Application Metrics NaN 공백 — 서버 측 병목 증거:**
+
+stress_mixed 구간에서 k6 OCR POST Response Time 패널은 연속 데이터(30s)가 존재하지만, Django OCR POST Latency 패널에는 약 1분간 NaN 공백이 발생합니다. k6는 클라이언트 측 timeout을 기록하지만, Django histogram은 응답 완료 시에만 counter가 증가하기 때문입니다. 50 VU 혼합 부하에서 4개 Gunicorn 스레드가 전부 OCR에 점유되면 **새 응답 완료가 없는 구간**이 발생하고, `rate(histogram[5m])=0` → `histogram_quantile=NaN`이 됩니다. 이 NaN 공백 자체가 v1 동기 처리 병목의 직접적 증거이며, 대시보드 폴링 p95가 2.66s(임계치 200ms의 13배)로 치솟는 현상과 같은 근본 원인입니다.
+
+---
+
+### 4.5.5 전체 HTTP 요약
+
+| 항목 | 값 |
+|------|-----|
+| **총 요청 수** | 7,248건 |
+| **전체 처리량** | 8.39 req/s |
+| **http_req_failed** | 0.55% (40/7,248) |
+| **http_req_duration avg** | 811.67ms |
+| **http_req_duration med** | 23.31ms |
+| **http_req_duration p90** | 102.26ms |
+| **http_req_duration p95** | 351.21ms |
+| **http_req_duration max** | 60s |
+| **전체 iterations** | 6,056 완료 / 6 중단 |
+| **checks 성공률** | 99.44% (7,220/7,260) |
+
+---
+
+### 4.5.6 핵심 발견
+
+- **동기 OCR이 전체 시스템 병목:** OCR 처리(avg 15.1s)가 Gunicorn HTTP 스레드를 점유하여 스레드 수(4개) 이상의 동시 OCR 요청 시 시스템 전체가 응답 불가 상태로 전락합니다.
+- **stress_mixed에서 OCR POST 성공률 28%:** 50 VUs 혼합 부하에서 OCR 쓰기의 72%가 실패합니다. 읽기 요청도 동반 영향을 받아 스트레스 읽기 에러 9%(155/170)가 발생했습니다.
+- **순수 읽기 부하는 안정적:** spike_resilience(15 VUs, p95=128.06ms), stress_ramp(50 VUs, p95=337.41ms) 모두 에러율 0%로 OCR이 없으면 v1도 충분한 읽기 성능을 보입니다.
+- **v2 비동기 EDA 전환의 정량적 근거 확보:** 동기 OCR POST 성공률 28% vs v2의 차량등록(OCR 분리) 쓰기 성공률 비교로 아키텍처 전환 효과를 정량화할 수 있습니다.
+
+> **[캡처 G-1]** Grafana → k6 Prometheus Dashboard 전체 뷰 (14분 테스트 전 구간)
+> - Grafana URL: http://10.178.0.9:3000
+> - 시간 범위: 2026-02-19 23:03:00 ~ 23:19:00 KST
+> - 확인 포인트: 6개 시나리오 전환 시점, stress_mixed 구간의 응답시간 및 에러율 급등, 전체 VU 추이
 
 ---
 
@@ -681,19 +870,75 @@ Event Driven Architecture 전환을 통해 기존 모놀리식 구조의 모든 
 
 ### 5.1 성능 비교
 
-| 항목 | Before (동기 HTTP) | After (Event Driven) | 개선율 | 측정 근거 |
-|-----|-------------------|---------------------|--------|----------|
-| **이벤트 처리 시간 (수신~디스패치)** | 3,000ms+ | **15ms** | **200배 빠름** | Before: 구조 추정 / After: 실측 (n=4) |
-| **Edge Device 블로킹** | 3,000ms+ | **0ms** (비동기) | **완전 해소** | Before: 구조 추정 / After: MQTT QoS 1 PUBACK |
-| **메시지 보장** | 없음 | **QoS 1 (At-Least-Once)** | **메시지 무손실** | 프로토콜 사양 |
-| **장애 격리** | 전체 영향 | **컴포넌트별 격리** | **독립 운영** | 아키텍처 설계 |
-| **확장성** | 서버 전체 | **Worker별 독립** | **세밀한 확장** | 아키텍처 설계 |
-| **HTTP API p95** | N/A | **38.85ms** | - | 실측 (k6 4시나리오, n=2,297) |
-| **스파이크 대응** | 서버 다운 위험 | **15 VUs에서 안정 (에러율 0%)** | **고가용성** | 실측 (k6 spike 시나리오) |
+#### 대시보드 폴링 비교 (시나리오 A)
 
-> **비교 기준 참고:** Before 수치는 동기 OCR 처리 구조(HTTP 요청 → OCR 완료 후 응답)에서의 설계 기반 추정값이며, After 수치는 현재 운영 환경에서의 실측값입니다.
+| 메트릭 | v1 (동기 OCR) | v2 (비동기 EDA) | 개선율 | 비고 |
+|-------|-------------|---------------|--------|------|
+| dashboard p95 | 2.66s | - | - | 3 VUs, 동일 조건 |
+| 목록 조회 p95 | 215.87ms | - | - | v1:cars / v2:detections |
+| 미처리 목록 p95 | 149.37ms | - | - | v1:unchecked / v2:pending |
+| 에러율 | 0% | - | - | |
 
-### 5.2 아키텍처 전환 핵심 성과
+#### 혼합 워크로드 비교 (시나리오 C)
+
+| 메트릭 | v1 (동기 OCR) | v2 (비동기 EDA) | 개선율 | 비고 |
+|-------|-------------|---------------|--------|------|
+| 읽기 p95 | 351.21ms (전체 http p95) | - | - | 0→9 VUs, 별도 커스텀 메트릭 없음 |
+| 쓰기 p95 | 24.2s (OCR POST p95) | - | - | v1:OCR POST / v2:차량등록 |
+| 에러율 | 0.55% (전체) | - | - | |
+
+#### 스파이크 내성 비교 (시나리오 D)
+
+| 메트릭 | v1 (동기 OCR) | v2 (비동기 EDA) | 개선율 | 비고 |
+|-------|-------------|---------------|--------|------|
+| p95 응답시간 | 128.06ms | - | - | 0→15 VUs, 읽기 전용 |
+| 에러율 | 0% | - | - | |
+| 최대 RPS | - | - | - | 테스트 후 기록 |
+
+#### 스트레스 테스트 비교 (시나리오 E, F)
+
+| 메트릭 | v1 (동기 OCR) | v2 (비동기 EDA) | 개선율 | 비고 |
+|-------|-------------|---------------|--------|------|
+| stress_ramp 읽기 p95 | 337.41ms | - | - | 0→50 VUs, 읽기 전용 |
+| stress_ramp 에러율 | 0% | - | - | |
+| stress_mixed 읽기 p95 | - (전체 p95 351.21ms) | - | - | 0→50 VUs, 80% 읽기 |
+| stress_mixed 쓰기 p95 | 30s | - | - | **v1: OCR POST / v2: 차량등록** |
+| stress_mixed 에러율 | 19.51% | - | - | |
+| 안정 최대 TPS | - | - | - | 테스트 후 기록 |
+
+> **핵심 비교 포인트:** stress_mixed 시나리오에서 v1의 20% OCR 쓰기가 전체 시스템 응답시간에 미치는 영향 vs v2에서 OCR이 분리되어 쓰기(차량등록)가 시스템에 미치는 영향이 최소화되는 차이를 확인하세요.
+
+> **비교 기준 참고:** v1 수치는 `depoly-v1/k6/load-test-v1.js` 실행 결과, v2 수치는 `backend/docker/k6/load-test.js` 실행 결과입니다.
+
+### 5.2 OCR 처리 방식 비교
+
+| 비교 항목 | v1 (동기 HTTP) | v2 (비동기 MQTT+AMQP) |
+|----------|---------------|---------------------|
+| OCR 실행 위치 | Django HTTP 스레드 내 | 전용 ocr-worker (별도 인스턴스) |
+| HTTP 스레드 점유 | OCR 완료까지 점유 (3~10초) | OCR과 무관 (즉시 응답) |
+| Edge Device 블로킹 | 응답 대기 3초+ | MQTT PUBACK 즉시 (<1ms) |
+| OCR 부하 시 API 영향 | 전체 API 응답시간 증가 | API 영향 없음 |
+| 동시 OCR 처리 | Gunicorn 스레드 수에 종속 | Worker concurrency로 독립 제어 |
+| OCR 장애 시 | API 전체 장애 | API 정상, OCR 큐에 보존 |
+| 확장 방법 | Django 서버 전체 스케일 아웃 | OCR Worker만 독립 스케일 아웃 |
+
+> **stress_mixed에서의 차이:**
+> - v1: 20% OCR POST → HTTP 스레드 3~10초 점유 → 나머지 80% 읽기 요청도 큐잉 → **시스템 전체 응답시간 급등**
+> - v2: 20% 차량등록 POST → <300ms 처리 → 읽기 요청에 영향 미미 → **시스템 안정**
+
+### 5.2.1 인프라 비용 대비 성능 비교
+
+| 항목 | v1 (모놀리식) | v2 (분산 EDA) | 비고 |
+|------|-------------|-------------|------|
+| 인스턴스 수 | 1 (e2-standard-2) | 6 (e2-small) | |
+| 총 vCPU | 2 | 12 | 6배 |
+| 총 RAM | 4 GB | 12 GB (+ e2-medium 4GB DB) | 4배 |
+| HTTP API TPS | - | - | [테스트 후 기록] |
+| 이벤트 처리량 | 동기 OCR 제약 | - | [테스트 후 기록] |
+| 장애 격리 | 불가 (모놀리식) | 컴포넌트별 격리 | 구조적 개선 |
+| 독립 확장 | 불가 | Worker별 확장 | 구조적 개선 |
+
+### 5.3 아키텍처 전환 핵심 성과
 
 ```mermaid
 graph LR
@@ -710,7 +955,7 @@ graph LR
 
     subgraph After["Event Driven Architecture"]
         A1["Django<br/>(API만)"]
-        A2["15ms 처리"]
+        A2["[실측값]ms 처리"]
         A3["MQTT+AMQP"]
         A4["장애 격리"]
         style A1 fill:#90EE90
@@ -726,7 +971,7 @@ graph LR
 
 | 기존 문제 | 해결 방법 | 효과 |
 |----------|----------|------|
-| **OCR 동기 처리** | OCR Worker 분리 + AMQP 비동기 처리 | 이벤트 처리시간 3000ms → 15ms |
+| **OCR 동기 처리** | OCR Worker 분리 + AMQP 비동기 처리 | 이벤트 처리시간 대폭 단축 (재측정 예정) |
 | **Edge Device 블로킹** | MQTT QoS 1 + 즉시 ACK | 연속 감지 가능, 데이터 유실 방지 |
 | **HTTP IoT 통신** | MQTT 프로토콜 도입 | 경량 프로토콜, 메시지 보장, 오프라인 버퍼링 |
 | **장애 전파** | 컴포넌트 분리 + 이벤트 큐 보존 | OCR 장애 시에도 API 정상 운영 |
@@ -749,9 +994,9 @@ graph LR
 | **Celery Workers** | Task 처리량, 지연 시간, 실패율 |
 | **Application Logs** | Loki 기반 통합 로그 검색 |
 
-**📸 [스크린샷 삽입: System Overview 대시보드 - 6개 인스턴스 CPU/Memory 전체 현황]**
+**[스크린샷: System Overview 대시보드 - 6개 인스턴스 CPU/Memory 전체 현황]**
 
-**📸 [스크린샷 삽입: MySQL Performance 대시보드 - 커넥션 수 변화 (부하 테스트 구간)]**
+**[스크린샷: MySQL Performance 대시보드 - 커넥션 수 변화 (부하 테스트 구간)]**
 
 ### 6.2 Prometheus 타겟 상태
 
@@ -771,7 +1016,7 @@ graph LR
 | celery | speedcam-ocr | ✅ UP |
 | otel | speedcam-mon | ✅ UP |
 
-**📸 [스크린샷 삽입: Prometheus → Status → Targets 페이지 (11개 타겟 All UP)]**
+**[스크린샷: Prometheus → Status → Targets 페이지 (11개 타겟 All UP)]**
 
 ### 6.3 로그 수집 현황
 
@@ -792,17 +1037,17 @@ graph LR
 
 | 컴포넌트 | 이론값 | 실측값 | 근거 | 병목 요인 |
 |---------|-------|-------|------|----------|
-| **HTTP API (Django)** | ~80-100 req/s | **25 req/s (50VUs)** | k6 스트레스 테스트 실측 | Gunicorn 4 handlers + k6 리소스 경합 |
-| **HTTP API (15VUs)** | - | **6.75 req/s (p95=39ms)** | k6 4시나리오 실측 (실제 사용 패턴) | sleep 간격으로 낮은 req/s, 응답은 빠름 |
-| **MQTT Subscriber** | ~40 msg/s | **20 msg/s 무손실** | Burst 시나리오 (1200건/60초) | 단일 스레드 loop_forever() |
-| **MQTT Publish** | - | **0.37~0.91ms/건** | 3개 시나리오 실측 | 지연 무시 가능 |
+| **HTTP API (Django)** | ~80-100 req/s | - | 재측정 예정 | Gunicorn 4 handlers + k6 리소스 경합 |
+| **HTTP API (15VUs)** | - | - | 재측정 예정 | sleep 간격으로 낮은 req/s, 응답은 빠름 |
+| **MQTT Subscriber** | ~40 msg/s | - | 재측정 예정 | 단일 스레드 loop_forever() |
+| **MQTT Publish** | - | - | 재측정 예정 | 지연 무시 가능 |
 | **AMQP Broker** | ~10,000 msg/s | - | RabbitMQ 공식 벤치마크 참고 | 충분한 여유 (병목 없음) |
-| **OCR Worker (단건)** | ~0.2 msg/s | **0.2 msg/s** | 단건 실측 (5.1s/건, n=3) | EasyOCR CPU 추론 |
-| **OCR Worker (부하 시)** | - | **0.053~0.073 msg/s** | 3개 시나리오 실측 (13.7~18.8s/건) | 메모리 압박 + GCS 경합 |
-| **Alert Worker** | ~100 msg/s | - | 추정 (concurrency=100 설정) | FCM API 호출 |
+| **OCR Worker (단건)** | ~0.2 msg/s | - | 재측정 예정 | EasyOCR CPU 추론 |
+| **OCR Worker (부하 시)** | - | - | 재측정 예정 | 메모리 압박 + GCS 경합 |
+| **Alert Worker** | ~100 msg/s | - | 추정 (Celery gevent concurrency=100 설정) | FCM API 호출 |
 | **MySQL** | ~500 qps | - | 추정 (e2-medium 벤치마크) | e2-medium 4GB RAM |
 
-> **참고:** HTTP 실측값은 k6가 동일 인스턴스(e2-small)에서 실행된 결과. MQTT Subscriber는 Burst(20 msg/s)에서도 1,200건 전량 수신하여 단일 스레드임에도 충분한 처리량 확인. OCR Worker가 전체 파이프라인의 지배적 병목.
+> **참고:** HTTP 실측값은 k6가 동일 인스턴스(e2-small)에서 실행된 결과로 별도 클라이언트 사용 시 더 높을 수 있음. OCR Worker가 전체 파이프라인의 지배적 병목으로 예상.
 
 ### 7.2 파이프라인 전체 병목
 
@@ -810,27 +1055,25 @@ graph LR
 
 ```mermaid
 graph LR
-    A["HTTP API<br/>25 req/s (실측)"] ~~~ B
-    B["MQTT Subscriber<br/>20 msg/s 처리 확인"] -->|"병목"| C["OCR Worker<br/>0.06 msg/s (부하시 실측)"]
+    A["HTTP API<br/>(재측정 예정)"] ~~~ B
+    B["MQTT Subscriber<br/>(재측정 예정)"] -->|"병목"| C["OCR Worker<br/>(재측정 예정)"]
     C --> D["Alert Worker<br/>~100 msg/s (추정)"]
 
     style C fill:#ff6666
 ```
 
-**실측 데이터 기반 병목 분석 (3 시나리오 종합):**
-- **OCR Worker가 전체 파이프라인의 지배적 병목**임이 3개 시나리오에서 일관되게 확인됨
-- 단건 처리: 5.1s/건 (0.2 msg/s) → **동시 부하 시: 13.7~18.8s/건 (0.053~0.073 msg/s)로 2.7~3.7배 성능 저하**
-- Normal(0.33 msg/s)에서도 큐 피크 25, 300초 내 80%만 완료
-- Rush Hour(1.67 msg/s)에서 큐 피크 202, 300초 내 11%만 완료
-- Burst(20 msg/s)에서 큐 피크 1,381, 300초 내 1.5%만 완료 → 드레인 약 6.3시간 소요
+**병목 분석 (구조 기반):**
+- **OCR Worker가 전체 파이프라인의 지배적 병목**으로 예상
 - e2-small(2GB)에서 EasyOCR concurrency=1만 가능 (메모리 제약)
+- 동시 부하 시 메모리 압박 + GCS 경합으로 성능 저하 발생 예상
+- 구체적 수치는 테스트 수행 후 기록
 
 **해결 방안:**
 
 | 방법 | 예상 개선 | 비용 | 난이도 |
 |------|----------|------|-------|
-| OCR 인스턴스 추가 (horizontal) | 0.053 msg/s × N | 저 | 낮음 |
-| GPU 인스턴스 전환 | 5.1s → <1s (5x+) | 중 | 중 |
+| OCR 인스턴스 추가 (horizontal) | 처리량 N배 향상 | 저 | 낮음 |
+| GPU 인스턴스 전환 | OCR 추론 시간 대폭 단축 (CPU 대비 5x+ 목표) | 중 | 중 |
 | e2-medium 업그레이드 | 메모리 여유로 부하 시 성능 저하 완화 | 저 | 낮음 |
 | 경량 OCR 모델 (PaddleOCR) | ~2-3x 빠름 | 저 | 중 |
 | Edge 전처리 | 이미지 크기 감소 | 저 | 낮음 |
@@ -854,7 +1097,7 @@ graph LR
 | 이슈 | 현재 상태 | 영향도 | 개선 방안 |
 |------|----------|--------|----------|
 | **FCM 토큰 업데이트 API** | PATCH 엔드포인트 0% 성공률 | 🔴 High | API endpoint 로직 수정 |
-| **OCR Worker 확장성** | 단일 워커 0.2 msg/s | 🔴 High | GPU 인스턴스 또는 경량 OCR 모델 검토 |
+| **OCR Worker 확장성** | 단일 워커, 메모리 제약으로 concurrency=1 | 🔴 High | GPU 인스턴스 또는 경량 OCR 모델 검토 |
 | **모니터링 인스턴스 메모리** | 264MB 여유 (메모리 부족 위험) | 🟡 Medium | e2-medium 업그레이드 권장 |
 
 #### 8.2.2 최적화 (Medium Priority)
@@ -883,16 +1126,15 @@ SpeedCam 시스템은 기존 동기식 HTTP 기반 모놀리식 아키텍처에�
 
 **정량적 성과:**
 
-| 지표 | Before | After | 개선 | 근거 |
+| 지표 | v1 (동기 OCR) | v2 (비동기 EDA) | 개선 | 근거 |
 |------|--------|-------|------|------|
-| 이벤트 처리 시간 | 3,000ms+ ¹ | **15ms** | **200배** | After 실측 (n=4) |
-| Edge Device 블로킹 | 3,000ms+ ¹ | **0ms** | **완전 해소** | MQTT PUBACK |
-| HTTP API p95 | N/A | **38.85ms** | - | k6 4시나리오 실측 (n=2,297) |
-| MQTT 발행 성공률 | N/A | **100%** (20 msg/s까지) | - | MQTT 3시나리오 실측 (n=1,440) |
-| 메시지 보장 | 없음 | **QoS 1** | **무손실** | 프로토콜 사양 + DLQ 0건 실측 |
-| 스파이크 에러율 | 서버 다운 위험 ¹ | **0%** | **고가용성** | k6 실측 (15 VUs) |
-
-> ¹ Before 수치는 동기 OCR 처리 구조 기반 설계 추정값 (별도 부하 테스트 미수행)
+| 이벤트 처리 시간 | OCR avg 15.1s (동기) | 재측정 예정 | - | v1: 실측 / v2: 재측정 예정 |
+| Edge Device 블로킹 | OCR 완료까지 대기 (avg 15.1s) | **0ms** | **완전 해소** | v1: 실측 / v2: MQTT PUBACK |
+| HTTP API p95 (스파이크) | 128.06ms (읽기 전용) | 재측정 예정 | - | v1: spike_resilience 실측 |
+| OCR 동시 처리 성공률 | 28% (stress_mixed, 50 VUs) | 재측정 예정 | - | v1: 실측 / v2: 재측정 예정 |
+| 메시지 보장 | 없음 | **QoS 1** | **무손실** | 프로토콜 사양 |
+| 스파이크 에러율 | 0% (읽기 전용) / 19.51% (OCR 혼합) | 재측정 예정 | - | v1: 실측 |
+| stress_mixed OCR 에러율 | 19.51% | 재측정 예정 | - | v1: 실측 (28% OCR POST 성공) |
 
 **정성적 성과:**
 
@@ -900,6 +1142,7 @@ SpeedCam 시스템은 기존 동기식 HTTP 기반 모놀리식 아키텍처에�
 2. **독립 확장**: Worker별 독립적 스케일 아웃
 3. **완전한 관측성**: Prometheus + Grafana + Loki + Jaeger 통합 모니터링
 4. **IoT 최적화**: MQTT QoS 1로 메시지 전달 보장
+5. **Choreography 패턴**: OCR Worker → Alert Worker 직접 domain event 전달 (Main Service 불개입)
 
 ### 9.2 개선 로드맵
 
@@ -923,14 +1166,14 @@ SpeedCam 시스템은 기존 동기식 HTTP 기반 모놀리식 아키텍처에�
 
 SpeedCam 프로젝트는 **Event Driven Architecture**를 통해 기존 모놀리식 구조의 근본적 한계를 극복하고, 실시간 IoT 시스템으로서 요구되는 **높은 응답성**, **메시지 보장**, **장애 격리**를 모두 달성했습니다.
 
-특히 **이벤트 처리 시간 200배 개선 (3,000ms+ → 15ms)**, **완전한 비동기 처리**, **컴포넌트별 독립 확장**이라는 핵심 목표를 성공적으로 구현하여, 프로덕션 환경에서 안정적으로 운영 가능한 시스템으로 발전했습니다.
+특히 **완전한 비동기 처리**, **Choreography 패턴 기반 도메인 이벤트 흐름 (OCR Worker → Alert Worker Kombu Consumer)**, **컴포넌트별 독립 확장**이라는 핵심 목표를 성공적으로 구현하여, 프로덕션 환경에서 안정적으로 운영 가능한 시스템으로 발전했습니다.
 
-앞으로 OCR Worker GPU 전환과 DB 커넥션 풀링 최적화를 통해 더욱 빠르고 효율적인 시스템으로 발전할 것으로 기대됩니다.
+앞으로 OCR Worker GPU 전환과 DB 커넥션 풀링 최적화를 통해 더욱 빠르고 효율적인 시스템으로 발전할 것으로 기대됩니다. 정량적 성과 수치는 재측정 후 기록됩니다.
 
 ---
 
-**문서 버전:** 2.0
-**최종 수정일:** 2026-02-12
+**문서 버전:** 3.0
+**최종 수정일:** 2026-02-19
 **테스트 일시:** 2026-02-12 (k6 HTTP 4시나리오 + MQTT 3시나리오)
 **작성자:** SpeedCam Backend Team
 **관련 문서:** [ARCHITECTURE_COMPARISON.md](./ARCHITECTURE_COMPARISON.md)

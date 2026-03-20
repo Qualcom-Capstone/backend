@@ -191,22 +191,22 @@ graph TB
     end
 
     subgraph Workers["Event Processors"]
-        OCR["ocr-worker<br/>• 감지 이벤트 처리<br/>• OCR 수행"]
-        Alert["alert-worker<br/>• 완료 이벤트 처리<br/>• FCM 발송"]
+        OCR["ocr-worker<br/>• 감지 이벤트 처리<br/>• OCR 수행<br/>• 도메인 이벤트 발행"]
+        Alert["alert-worker<br/>• Kombu Consumer (단일 스레드)<br/>• Celery gevent Worker<br/>• FCM Push 병렬 발송"]
     end
 
     subgraph MessageBroker["RabbitMQ"]
         MQTT["MQTT Plugin"]
         Queue1[("감지 이벤트 큐")]
-        Queue2[("알림 이벤트 큐")]
+        Queue2[("도메인 이벤트<br/>detections.completed")]
     end
 
     Camera -->|"MQTT Publish"| MQTT
     MQTT --> MQTT_Sub
     Publisher --> Queue1
     Queue1 --> OCR
-    OCR --> Queue2
-    Queue2 --> Alert
+    OCR -->|"domain_events exchange (topic)"| Queue2
+    Queue2 -->|"Choreography: 직접 구독"| Alert
 
     Main --> DB1[("default")]
     Main --> DB2[("vehicles_db")]
@@ -414,30 +414,33 @@ sequenceDiagram
 
     Edge->>RMQ: MQTT Publish (과속 차량 감지)
     RMQ-->>Edge: PUBACK (즉시)
-    RMQ->>Main: 메시지 전달 (subscribe)
+    RMQ->>Main: 메시지 전달 (MQTT subscribe)
     Main->>Main: DB 저장 (pending)
     Main->>RMQ: 감지 이벤트 발행 (AMQP)
 
-    RMQ->>OCR: 감지 이벤트 수신
+    RMQ->>OCR: 감지 이벤트 수신 (Celery task)
     OCR->>OCR: 번호판 OCR 처리
     OCR->>OCR: DB 업데이트 (completed)
-    OCR->>RMQ: OCR 완료 이벤트 발행
+    OCR->>RMQ: detections.completed 도메인 이벤트 발행<br/>(domain_events exchange, topic type)
 
-    RMQ->>Alert: 완료 이벤트 수신
-    Alert->>User: FCM Push 알림
+    Note over Alert: Choreography 패턴<br/>Alert Worker가 직접 구독 (Main 미개입)
+    RMQ->>Alert: detections.completed 이벤트 수신<br/>(Kombu Consumer, 단일 스레드)
+    Alert->>Alert: send_notification.delay() 호출
+    Alert->>User: FCM Push 알림<br/>(Celery gevent Worker, 병렬 처리)
 ```
 
 ### 4.2 Before vs After 비교
 
-| 문제 영역 | Before | After |
-|----------|--------|-------|
-| **OCR 처리** | Django 동기 (블로킹) | ocr-worker 비동기 |
-| **응답 시간** | 3초+ | < 100ms |
-| **IoT 프로토콜** | HTTP (오버헤드) | MQTT (경량, QoS) |
-| **메시지 보장** | 없음 | At least once |
-| **장애 격리** | 전체 영향 | 컴포넌트 격리 |
-| **확장성** | 서버 전체 확장 | Worker별 독립 확장 |
-| **데이터베이스** | 단일 DB | 서비스별 4개 DB |
+| 문제 영역 | Before | After | Before 실측 | After 실측 |
+|----------|--------|-------|-----------|-----------|
+| **OCR 처리** | Django 동기 (블로킹) | ocr-worker 비동기 | - | - |
+| **응답 시간** | 3초+ | < 100ms | [v1 OCR p95] | [v2 dashboard p95] |
+| **IoT 프로토콜** | HTTP (오버헤드) | MQTT (경량, QoS) | - | - |
+| **메시지 보장** | 없음 | At least once | - | QoS 1 |
+| **장애 격리** | 전체 영향 | 컴포넌트 격리 | - | - |
+| **확장성** | 서버 전체 확장 | Worker별 독립 확장 | - | - |
+| **데이터베이스** | 단일 DB | 서비스별 4개 DB | - | - |
+| **Alert 처리** | Main Service 경유 (Orchestration) | Choreography: Kombu Consumer가 detections.completed 직접 구독 → Celery gevent Worker로 FCM 병렬 발송 | - | - |
 
 ### 4.3 핵심 성과
 
@@ -447,3 +450,27 @@ sequenceDiagram
 2. **Edge Device 효율화**: 즉시 응답으로 연속 감지 가능, 데이터 유실 방지
 3. **IoT 최적화**: MQTT 프로토콜로 경량화, 메시지 전달 보장, 오프라인 대응
 4. **운영 안정성**: 장애 격리, 독립적 확장, 이벤트 보존으로 시스템 복원력 확보
+
+### 4.4 실측 성능 데이터
+
+> 부하테스트 수행 후 아래 표에 수치를 기록합니다.
+> - v1 테스트 스크립트: `depoly-v1/k6/load-test-v1.js`
+> - v2 HTTP 테스트 스크립트: `backend/docker/k6/load-test.js`
+> - v2 MQTT 테스트 스크립트: `backend/docker/k6/mqtt-load-test.py`
+
+| 비교 항목 | v1 실측 | v2 실측 | 개선율 | 비고 |
+|----------|--------|--------|--------|------|
+| 대시보드 읽기 p95 | - | - | - | 동일 3 VUs |
+| 목록 조회 p95 | - | - | - | v1:cars / v2:detections |
+| 미처리 목록 p95 | - | - | - | v1:unchecked / v2:pending |
+| 혼합 워크로드 읽기 p95 | - | - | - | 동일 0→9 VUs |
+| 스파이크 15VUs p95 | - | - | - | |
+| 스파이크 15VUs 에러율 | - | - | - | |
+| 스트레스 50VUs 읽기 p95 | - | - | - | stress_ramp |
+| 스트레스 50VUs 읽기 에러율 | - | - | - | stress_ramp |
+| 스트레스 50VUs 쓰기 p95 | - | - | - | v1: 동기 OCR / v2: 차량등록 |
+| 스트레스 50VUs 혼합 에러율 | - | - | - | stress_mixed |
+| OCR 1건 처리시간 | - | - | - | v1: 동기 / v2: 비동기 E2E |
+| 최대 안정 TPS | - | - | - | 에러율 < 5% 기준 |
+
+> **핵심 비교 포인트:** 스트레스 50VUs 쓰기 p95에서 v1(동기 OCR, 3~10초 예상)과 v2(차량등록 POST, <300ms 예상)의 극적인 차이가 OCR 분리 효과를 가장 명확히 보여줍니다.
